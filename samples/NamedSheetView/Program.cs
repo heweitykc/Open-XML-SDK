@@ -7,8 +7,11 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using DocumentFormat.OpenXml.Presentation;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
+
 using A = DocumentFormat.OpenXml.Drawing;
 using P = DocumentFormat.OpenXml.Presentation;
 
@@ -23,9 +26,10 @@ namespace AddNamedSheetView
                 Common.ExampleUtilities.ShowHelp(new string[]
                 {
                     "NamedSheetView: ",
-                    "Usage: NamedSheetView <filename>",
+                    "Usage: NamedSheetView <filename> [jsonfile]",
                     "Where: <filename> is the .xlsx file in which to add a named sheet view.",
                     "       or .pptx file to copy slide 2 and insert at the end.",
+                    "       [jsonfile] (optional) JSON file with PPT outline data to replace first slide placeholders.",
                 });
             }
             else if (Common.ExampleUtilities.CheckIfFilesExist(args))
@@ -39,7 +43,25 @@ namespace AddNamedSheetView
                 }
                 else if (extension == ".pptx")
                 {
-                    CopyAndInsertSlide(filePath);
+                    string outputPath = filePath;
+
+                    // 检查是否提供了 JSON 文件
+                    if (args.Length >= 2 && File.Exists(args[1]))
+                    {
+                        string jsonContent = File.ReadAllText(args[1]);
+                        
+                        // 生成输出文件名
+                        outputPath = GenerateOutputPath(filePath);
+                        
+                        // 复制源文件到新文件
+                        File.Copy(filePath, outputPath, true);
+                        Console.WriteLine($"Created new file: {outputPath}");
+                        
+                        // 在新文件上进行操作
+                        ReplaceFirstSlideWithJson(outputPath, jsonContent);
+                    }
+
+                    CopyAndInsertSlide(outputPath);
                 }
                 else
                 {
@@ -47,6 +69,17 @@ namespace AddNamedSheetView
                     Console.WriteLine("Only .xlsx and .pptx files are supported.");
                 }
             }
+        }
+
+        private static string GenerateOutputPath(string inputPath)
+        {
+            string directory = Path.GetDirectoryName(inputPath) ?? string.Empty;
+            string fileNameWithoutExt = Path.GetFileNameWithoutExtension(inputPath);
+            string extension = Path.GetExtension(inputPath);
+            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+
+            string outputFileName = $"{fileNameWithoutExt}_modified_{timestamp}{extension}";
+            return Path.Combine(directory, outputFileName);
         }
 
         public static void InsertNamedSheetView(string xlsxPath)
@@ -298,6 +331,124 @@ namespace AddNamedSheetView
 
             Console.WriteLine($"\nTotal elements on slide: {elementCount}");
             Console.WriteLine($"Total associated parts: {partCount}");
+        }
+
+        private static void ReplaceFirstSlideWithJson(string pptxPath, string jsonContent)
+        {
+            Console.WriteLine("\n=== Replacing First Slide Placeholders with JSON Data ===");
+
+            try
+            {
+                using (PresentationDocument presentationDocument = PresentationDocument.Open(pptxPath, true))
+                {
+                    PresentationPart presentationPart = presentationDocument.PresentationPart;
+                    if (presentationPart?.Presentation?.SlideIdList == null)
+                    {
+                        Console.WriteLine("Invalid presentation");
+                        return;
+                    }
+
+                    // 解析 JSON
+                    using (JsonDocument doc = JsonDocument.Parse(jsonContent))
+                    {
+                        JsonElement root = doc.RootElement;
+
+                        // 提取替换值
+                        var replacements = new Dictionary<string, string>
+                        {
+                            { "{ppt_title}", root.GetProperty("title").GetString() ?? string.Empty },
+                            { "{ppt_subtitle}", root.GetProperty("subtitle").GetString() ?? string.Empty },
+                            { "{ppt_author}", root.GetProperty("author").GetString() ?? string.Empty },
+                            { "{ppt_website}", root.GetProperty("website").GetString() ?? string.Empty },
+                        };
+
+                        // 获取第一页
+                        P.SlideId firstSlideId = presentationPart.Presentation.SlideIdList.ChildElements[0] as P.SlideId;
+                        if (firstSlideId == null)
+                        {
+                            Console.WriteLine("Cannot find first slide");
+                            return;
+                        }
+
+                        SlidePart firstSlidePart = presentationPart.GetPartById(firstSlideId.RelationshipId) as SlidePart;
+                        if (firstSlidePart == null)
+                        {
+                            Console.WriteLine("Cannot get first slide part");
+                            return;
+                        }
+
+                        // 替换所有形状中的占位符文本
+                        int replacedCount = 0;
+                        var shapes = firstSlidePart.Slide.Descendants<P.Shape>();
+                        foreach (var shape in shapes)
+                        {
+                            replacedCount += ReplaceShapePlaceholders(shape, replacements);
+                        }
+
+                        presentationPart.Presentation.Save();
+                        Console.WriteLine($"Successfully replaced {replacedCount} placeholders on first slide");
+                    }
+                }
+            }
+            catch (JsonException ex)
+            {
+                Console.WriteLine($"JSON parsing error: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error replacing placeholders: {ex.Message}");
+            }
+        }
+
+        private static int ReplaceShapePlaceholders(P.Shape shape, Dictionary<string, string> replacements)
+        {
+            int count = 0;
+
+            if (shape.TextBody == null)
+            {
+                return count;
+            }
+
+            // 首先检查整个形状的文本是否包含占位符
+            string shapeFullText = GetShapeText(shape);
+
+            foreach (var kvp in replacements)
+            {
+                if (shapeFullText.Contains(kvp.Key))
+                {
+                    // 找到占位符，用 JSON 值完全覆盖整个文本框内容
+                    Console.WriteLine($"  Found placeholder '{kvp.Key}' in shape");
+                    Console.WriteLine($"  Original text: '{shapeFullText.Trim()}'");
+                    Console.WriteLine($"  Replacing entire content with: '{kvp.Value}'");
+
+                    // 清空所有段落
+                    var paragraphs = shape.TextBody.Elements<A.Paragraph>().ToList();
+                    foreach (var para in paragraphs)
+                    {
+                        para.RemoveAllChildren();
+                    }
+
+                    // 如果没有段落，创建一个
+                    if (paragraphs.Count == 0)
+                    {
+                        var newParagraph = new A.Paragraph();
+                        shape.TextBody.AppendChild(newParagraph);
+                        paragraphs.Add(newParagraph);
+                    }
+
+                    // 在第一个段落中设置新文本
+                    var firstParagraph = paragraphs[0];
+                    var newRun = new A.Run();
+                    var newText = new A.Text(kvp.Value);
+                    newRun.AppendChild(newText);
+                    firstParagraph.AppendChild(newRun);
+
+                    count++;
+                    break; // 一个形状只替换一次
+                }
+            }
+
+            return count;
         }
 
         private static void AddTimestampToSlide(SlidePart slidePart)
