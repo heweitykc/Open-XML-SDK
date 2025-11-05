@@ -191,3 +191,7 @@ msbuild.binlog
 /.idea/
 
 BenchmarkDotNet.Artifacts/
+
+/samples/NamedSheetView/test1
+/samples/NamedSheetView/ppt_data.json
+/samples/NamedSheetView/output

@@ -1,0 +1,1 @@
+dotnet run --no-restore  --framework net8.0 -- /mnt/d/work/palmmob3_server/cron/output/818443_6.pptx  /mnt/d/work/palmmob3_oo63/office_tools/full_ai_ppt.json
