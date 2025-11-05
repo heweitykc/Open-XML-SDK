@@ -59,6 +59,7 @@ namespace AddNamedSheetView
                         
                         // 在新文件上进行操作
                         ReplaceFirstSlideWithJson(outputPath, jsonContent);
+                        ReplaceSecondSlideWithJson(outputPath, jsonContent);
                     }
 
                     CopyAndInsertSlide(outputPath);
@@ -398,6 +399,167 @@ namespace AddNamedSheetView
             {
                 Console.WriteLine($"Error replacing placeholders: {ex.Message}");
             }
+        }
+
+        private static void ReplaceSecondSlideWithJson(string pptxPath, string jsonContent)
+        {
+            Console.WriteLine("\n=== Replacing Second Slide (TOC) with JSON Data ===");
+
+            try
+            {
+                using (PresentationDocument presentationDocument = PresentationDocument.Open(pptxPath, true))
+                {
+                    PresentationPart presentationPart = presentationDocument.PresentationPart;
+                    if (presentationPart?.Presentation?.SlideIdList == null)
+                    {
+                        Console.WriteLine("Invalid presentation");
+                        return;
+                    }
+
+                    if (presentationPart.Presentation.SlideIdList.ChildElements.Count < 2)
+                    {
+                        Console.WriteLine("Presentation does not have a second slide");
+                        return;
+                    }
+
+                    // 解析 JSON
+                    using (JsonDocument doc = JsonDocument.Parse(jsonContent))
+                    {
+                        JsonElement root = doc.RootElement;
+
+                        // 获取 parts 数组
+                        if (!root.TryGetProperty("parts", out JsonElement partsArray))
+                        {
+                            Console.WriteLine("JSON does not contain 'parts' array");
+                            return;
+                        }
+
+                        // 提取所有 part titles
+                        var partTitles = new List<string>();
+                        foreach (var part in partsArray.EnumerateArray())
+                        {
+                            if (part.TryGetProperty("title", out JsonElement title))
+                            {
+                                partTitles.Add(title.GetString() ?? string.Empty);
+                            }
+                        }
+
+                        Console.WriteLine($"Found {partTitles.Count} part titles in JSON");
+
+                        // 获取第二页
+                        P.SlideId secondSlideId = presentationPart.Presentation.SlideIdList.ChildElements[1] as P.SlideId;
+                        if (secondSlideId == null)
+                        {
+                            Console.WriteLine("Cannot find second slide");
+                            return;
+                        }
+
+                        SlidePart secondSlidePart = presentationPart.GetPartById(secondSlideId.RelationshipId) as SlidePart;
+                        if (secondSlidePart == null)
+                        {
+                            Console.WriteLine("Cannot get second slide part");
+                            return;
+                        }
+
+                        // 查找所有包含 {part_title_x} 占位符的形状
+                        var shapes = secondSlidePart.Slide.Descendants<P.Shape>().ToList();
+                        var placeholderShapes = new Dictionary<int, P.Shape>();
+
+                        foreach (var shape in shapes)
+                        {
+                            string shapeText = GetShapeText(shape);
+                            // 查找 {part_title_1}, {part_title_2}, ... 等占位符（索引从1开始）
+                            for (int i = 1; i <= 10; i++) // 最多支持10个
+                            {
+                                string placeholder = $"{{part_title_{i}}}";
+                                if (shapeText.Contains(placeholder))
+                                {
+                                    placeholderShapes[i] = shape;
+                                    Console.WriteLine($"Found placeholder '{placeholder}' in shape");
+                                    break;
+                                }
+                            }
+                        }
+
+                        Console.WriteLine($"Found {placeholderShapes.Count} placeholder shapes");
+
+                        // 处理占位符和标题的匹配（索引从1开始）
+                        int maxIndex = Math.Max(
+                            placeholderShapes.Count > 0 ? placeholderShapes.Keys.Max() : 0,
+                            partTitles.Count
+                        );
+
+                        for (int i = 1; i <= maxIndex; i++)
+                        {
+                            int titleIndex = i - 1; // 标题数组索引从0开始
+                            
+                            if (placeholderShapes.ContainsKey(i) && titleIndex < partTitles.Count)
+                            {
+                                // 有占位符且有对应的标题，进行替换
+                                Console.WriteLine($"  Replacing {{part_title_{i}}} with: '{partTitles[titleIndex]}'");
+                                ReplaceShapeContent(placeholderShapes[i], partTitles[titleIndex]);
+                            }
+                            else if (placeholderShapes.ContainsKey(i) && titleIndex >= partTitles.Count)
+                            {
+                                // 有占位符但没有对应的标题，删除形状
+                                Console.WriteLine($"  Deleting extra placeholder shape: {{part_title_{i}}}");
+                                DeleteShape(placeholderShapes[i]);
+                            }
+                            else if (!placeholderShapes.ContainsKey(i) && titleIndex < partTitles.Count)
+                            {
+                                // 有标题但没有占位符，跳过
+                                Console.WriteLine($"  Skipping title (no placeholder): '{partTitles[titleIndex]}'");
+                            }
+                        }
+
+                        presentationPart.Presentation.Save();
+                        Console.WriteLine("Second slide updated successfully");
+                    }
+                }
+            }
+            catch (JsonException ex)
+            {
+                Console.WriteLine($"JSON parsing error: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error replacing second slide: {ex.Message}");
+            }
+        }
+
+        private static void ReplaceShapeContent(P.Shape shape, string newContent)
+        {
+            if (shape.TextBody == null)
+            {
+                return;
+            }
+
+            // 清空所有段落
+            var paragraphs = shape.TextBody.Elements<A.Paragraph>().ToList();
+            foreach (var para in paragraphs)
+            {
+                para.RemoveAllChildren();
+            }
+
+            // 如果没有段落，创建一个
+            if (paragraphs.Count == 0)
+            {
+                var newParagraph = new A.Paragraph();
+                shape.TextBody.AppendChild(newParagraph);
+                paragraphs.Add(newParagraph);
+            }
+
+            // 在第一个段落中设置新文本
+            var firstParagraph = paragraphs[0];
+            var newRun = new A.Run();
+            var newText = new A.Text(newContent);
+            newRun.AppendChild(newText);
+            firstParagraph.AppendChild(newRun);
+        }
+
+        private static void DeleteShape(P.Shape shape)
+        {
+            shape.Remove();
         }
 
         private static int ReplaceShapePlaceholders(P.Shape shape, Dictionary<string, string> replacements)
