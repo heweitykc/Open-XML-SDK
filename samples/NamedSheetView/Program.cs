@@ -473,9 +473,12 @@ namespace AddNamedSheetView
                         var shapes = secondSlidePart.Slide.Descendants<P.Shape>().ToList();
                         var placeholderShapes = new Dictionary<int, P.Shape>();
 
+                        var indexPlaceholderShapes = new Dictionary<int, P.Shape>();
+
                         foreach (var shape in shapes)
                         {
                             string shapeText = GetShapeText(shape);
+                            
                             // 查找 {part_title_1}, {part_title_2}, ... 等占位符（索引从1开始）
                             for (int i = 1; i <= 10; i++) // 最多支持10个
                             {
@@ -487,9 +490,22 @@ namespace AddNamedSheetView
                                     break;
                                 }
                             }
+                            
+                            // 查找 {p1}, {p2}, {p3}, ... 等索引占位符
+                            for (int i = 1; i <= 10; i++)
+                            {
+                                string indexPlaceholder = $"{{p{i}}}";
+                                if (shapeText.Contains(indexPlaceholder))
+                                {
+                                    indexPlaceholderShapes[i] = shape;
+                                    Console.WriteLine($"Found index placeholder '{indexPlaceholder}' in shape");
+                                    break;
+                                }
+                            }
                         }
 
                         Console.WriteLine($"Found {placeholderShapes.Count} placeholder shapes");
+                        Console.WriteLine($"Found {indexPlaceholderShapes.Count} index placeholder shapes");
 
                         // 处理占位符和标题的匹配（索引从1开始）
                         int maxIndex = Math.Max(
@@ -517,6 +533,30 @@ namespace AddNamedSheetView
                             {
                                 // 有标题但没有占位符，跳过
                                 Console.WriteLine($"  Skipping title (no placeholder): '{partTitles[titleIndex]}'");
+                            }
+                        }
+
+                        // 处理索引占位符 {p1}, {p2}, {p3}, ...
+                        int maxIndexPlaceholder = Math.Max(
+                            indexPlaceholderShapes.Count > 0 ? indexPlaceholderShapes.Keys.Max() : 0,
+                            partTitles.Count
+                        );
+
+                        for (int i = 1; i <= maxIndexPlaceholder; i++)
+                        {
+                            int titleIndex = i - 1; // 标题数组索引从0开始
+                            
+                            if (indexPlaceholderShapes.ContainsKey(i) && titleIndex < partTitles.Count)
+                            {
+                                // 有索引占位符且有对应的标题，用索引数字替换
+                                Console.WriteLine($"  Replacing {{p{i}}} with: '{i}'");
+                                ReplaceShapeContent(indexPlaceholderShapes[i], i.ToString());
+                            }
+                            else if (indexPlaceholderShapes.ContainsKey(i) && titleIndex >= partTitles.Count)
+                            {
+                                // 有索引占位符但没有对应的标题，删除形状
+                                Console.WriteLine($"  Deleting extra index placeholder shape: {{p{i}}}");
+                                DeleteShape(indexPlaceholderShapes[i]);
                             }
                         }
 
