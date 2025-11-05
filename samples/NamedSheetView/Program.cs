@@ -79,8 +79,16 @@ namespace AddNamedSheetView
             string extension = Path.GetExtension(inputPath);
             string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
 
+            // 创建 output 目录
+            string outputDirectory = Path.Combine(directory, "output");
+            if (!Directory.Exists(outputDirectory))
+            {
+                Directory.CreateDirectory(outputDirectory);
+                Console.WriteLine($"Created output directory: {outputDirectory}");
+            }
+
             string outputFileName = $"{fileNameWithoutExt}_modified_{timestamp}{extension}";
-            return Path.Combine(directory, outputFileName);
+            return Path.Combine(outputDirectory, outputFileName);
         }
 
         public static void InsertNamedSheetView(string xlsxPath)
