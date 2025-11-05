@@ -155,6 +155,9 @@ namespace AddNamedSheetView
                 // 复制幻灯片内容
                 newSlidePart.Slide = (P.Slide)secondSlidePart.Slide.CloneNode(true);
 
+                // 给新幻灯片的所有文本添加时间戳
+                AddTimestampToSlide(newSlidePart);
+
                 // 复制所有关联的部分（图片、图表等）
                 foreach (var part in secondSlidePart.Parts)
                 {
@@ -295,6 +298,54 @@ namespace AddNamedSheetView
 
             Console.WriteLine($"\nTotal elements on slide: {elementCount}");
             Console.WriteLine($"Total associated parts: {partCount}");
+        }
+
+        private static void AddTimestampToSlide(SlidePart slidePart)
+        {
+            if (slidePart?.Slide?.CommonSlideData?.ShapeTree == null)
+            {
+                return;
+            }
+
+            string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            Console.WriteLine($"\nAdding timestamp to all text: {timestamp}");
+
+            var shapeTree = slidePart.Slide.CommonSlideData.ShapeTree;
+
+            // 处理普通形状
+            var shapes = shapeTree.Descendants<P.Shape>();
+            foreach (var shape in shapes)
+            {
+                AddTimestampToShape(shape, timestamp);
+            }
+
+            Console.WriteLine("Timestamp added successfully!");
+        }
+
+        private static void AddTimestampToShape(P.Shape shape, string timestamp)
+        {
+            if (shape.TextBody == null)
+            {
+                return;
+            }
+
+            // 获取所有段落
+            var paragraphs = shape.TextBody.Elements<A.Paragraph>().ToList();
+
+            // 遍历每个段落中的文本运行
+            foreach (var paragraph in paragraphs)
+            {
+                var runs = paragraph.Elements<A.Run>().ToList();
+                foreach (var run in runs)
+                {
+                    var textElement = run.Elements<A.Text>().FirstOrDefault();
+                    if (textElement != null && !string.IsNullOrWhiteSpace(textElement.Text))
+                    {
+                        // 在原文本后添加时间戳
+                        textElement.Text = $"{textElement.Text} [{timestamp}]";
+                    }
+                }
+            }
         }
 
         private static int ListGroupShapeElements(P.GroupShape groupShape, string indent)
