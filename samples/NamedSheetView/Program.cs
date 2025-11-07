@@ -125,17 +125,14 @@ namespace AddNamedSheetView
             string directory = Path.GetDirectoryName(inputPath) ?? string.Empty;
             string fileNameWithoutExt = Path.GetFileNameWithoutExtension(inputPath);
             string extension = Path.GetExtension(inputPath);
-            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
 
-            // 创建 output 目录
+            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+            string guid = Guid.NewGuid().ToString("N").Substring(0, 8);
+
             string outputDirectory = Path.Combine(directory, "output");
-             if (!Directory.Exists(outputDirectory))
-             {
-                 Directory.CreateDirectory(outputDirectory);
-                 Log(() => $"Created output directory: {outputDirectory}");
-             }
+            Directory.CreateDirectory(outputDirectory);
 
-            string outputFileName = $"{fileNameWithoutExt}_modified_{timestamp}{extension}";
+            string outputFileName = $"{fileNameWithoutExt}_modified_{timestamp}_{guid}{extension}";
             return Path.Combine(outputDirectory, outputFileName);
         }
 
