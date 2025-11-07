@@ -12,6 +12,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Security.Cryptography;
+using System.Diagnostics;
 
 using A = DocumentFormat.OpenXml.Drawing;
 using P = DocumentFormat.OpenXml.Presentation;
@@ -35,56 +36,81 @@ namespace AddNamedSheetView
                 return;
             }
 
-            string filePath = args[0];
-            string extension = Path.GetExtension(filePath).ToLower();
-            string outputPath = filePath;
-            string jsonContent = File.ReadAllText(args[1]);
-            
-            // 生成输出文件名
-            outputPath = GenerateOutputPath(filePath);
-            
-            // 复制源文件到新文件
-            File.Copy(filePath, outputPath, true);
-            Console.WriteLine($"Created new file: {outputPath}");
-            
-            using (PresentationDocument presentationDocument = PresentationDocument.Open(outputPath, true))
-            {
-                PresentationPart presentationPart = presentationDocument.PresentationPart;
-                if (presentationPart?.Presentation?.SlideIdList == null)
+                try
                 {
-                    Console.WriteLine("Invalid presentation");
-                    return;
+                    string outputPath = GeneratePresentation(args[0], args[1]);
+                    Console.WriteLine(outputPath);
                 }
-
-                // 记录原始模板 PPT 的最后一页索引（在添加新 slides 之前）
-                int originalLastSlideIndex = presentationPart.Presentation.SlideIdList.ChildElements.Count - 1;
-                Console.WriteLine($"Original template has {originalLastSlideIndex + 1} slides");
-
-                // 解析 JSON
-                using (JsonDocument doc = JsonDocument.Parse(jsonContent))
+                catch (Exception ex)
                 {
-                    // 在新文件上进行操作
-                    ReplaceFirstSlideWithJson(presentationPart, doc);
-                    ReplaceSecondSlideWithJson(presentationPart, doc);
-
-                    // 生成各个 part 的 slides
-                    GeneratePartSlidesFromJson(presentationPart, doc);
-
-                    // 从原始模板复制最后一页并替换结束页占位符
-                    CopyAndReplaceLastSlideFromTemplate(presentationPart, originalLastSlideIndex, doc);
-
-                    //删除从索引 [2 - $originalLastSlideIndex] 的所有slides
-                    DeleteSlidesFromIndex(presentationPart, 2, originalLastSlideIndex);
-
-                    // 媒体资源去重与清理
-                    DeduplicateMediaResources(presentationPart);
-                    CleanupUnusedMediaResources(presentationPart);
+                    Log(() => $"Processing failed: {ex.Message}");
+#if DEBUG
+                    Log(() => ex.ToString());
+#endif
+                    Console.Error.WriteLine($"Error: {ex.Message}");
                 }
-
-                presentationPart.Presentation.Save();
-                Console.WriteLine($"{outputPath} saved");
-            }
         }
+
+            public static string GeneratePresentation(string sourceFilePath, string jsonFilePath)
+            {
+                if (string.IsNullOrWhiteSpace(sourceFilePath))
+                {
+                    throw new ArgumentException("Source file path cannot be null or empty.", nameof(sourceFilePath));
+                }
+
+                if (string.IsNullOrWhiteSpace(jsonFilePath))
+                {
+                    throw new ArgumentException("JSON file path cannot be null or empty.", nameof(jsonFilePath));
+                }
+
+                string jsonContent = File.ReadAllText(jsonFilePath);
+
+                // 生成输出文件名
+                string outputPath = GenerateOutputPath(sourceFilePath);
+
+                // 复制源文件到新文件
+                File.Copy(sourceFilePath, outputPath, true);
+                Log(() => $"Created new file: {outputPath}");
+
+                using (PresentationDocument presentationDocument = PresentationDocument.Open(outputPath, true))
+                {
+                    PresentationPart presentationPart = presentationDocument.PresentationPart;
+                    if (presentationPart?.Presentation?.SlideIdList == null)
+                    {
+                        throw new InvalidOperationException("Invalid presentation");
+                    }
+
+                    // 记录原始模板 PPT 的最后一页索引（在添加新 slides 之前）
+                    int originalLastSlideIndex = presentationPart.Presentation.SlideIdList.ChildElements.Count - 1;
+                    Log(() => $"Original template has {originalLastSlideIndex + 1} slides");
+
+                    // 解析 JSON
+                    using (JsonDocument doc = JsonDocument.Parse(jsonContent))
+                    {
+                        // 在新文件上进行操作
+                        ReplaceFirstSlideWithJson(presentationPart, doc);
+                        ReplaceSecondSlideWithJson(presentationPart, doc);
+
+                        // 生成各个 part 的 slides
+                        GeneratePartSlidesFromJson(presentationPart, doc);
+
+                        // 从原始模板复制最后一页并替换结束页占位符
+                        CopyAndReplaceLastSlideFromTemplate(presentationPart, originalLastSlideIndex, doc);
+
+                        //删除从索引 [2 - $originalLastSlideIndex] 的所有slides
+                        DeleteSlidesFromIndex(presentationPart, 2, originalLastSlideIndex);
+
+                        // 媒体资源去重与清理
+                        DeduplicateMediaResources(presentationPart);
+                        CleanupUnusedMediaResources(presentationPart);
+                    }
+
+                    presentationPart.Presentation.Save();
+                }
+
+                Log(() => $"{outputPath} saved");
+                return outputPath;
+            }
 
         private static string GenerateOutputPath(string inputPath)
         {
@@ -95,11 +121,11 @@ namespace AddNamedSheetView
 
             // 创建 output 目录
             string outputDirectory = Path.Combine(directory, "output");
-            if (!Directory.Exists(outputDirectory))
-            {
-                Directory.CreateDirectory(outputDirectory);
-                Console.WriteLine($"Created output directory: {outputDirectory}");
-            }
+             if (!Directory.Exists(outputDirectory))
+             {
+                 Directory.CreateDirectory(outputDirectory);
+                 Log(() => $"Created output directory: {outputDirectory}");
+             }
 
             string outputFileName = $"{fileNameWithoutExt}_modified_{timestamp}{extension}";
             return Path.Combine(outputDirectory, outputFileName);
@@ -107,32 +133,32 @@ namespace AddNamedSheetView
 
         private static void DeleteSlidesFromIndex(PresentationPart presentationPart, int startIndex, int endIndex)
         {
-            Console.WriteLine($"\n=== Deleting Original Template Slides from index {startIndex} to {endIndex} ===");
+            Log(() => $"\n=== Deleting Original Template Slides from index {startIndex} to {endIndex} ===");
 
             var slideIdList = presentationPart.Presentation.SlideIdList;
             if (slideIdList == null || slideIdList.ChildElements.Count == 0)
             {
-                Console.WriteLine("No slides found in presentation");
+                Log(() => "No slides found in presentation");
                 return;
             }
 
             // 验证索引范围
             if (startIndex < 0 || startIndex >= slideIdList.ChildElements.Count)
             {
-                Console.WriteLine($"Invalid start index: {startIndex}");
+                Log(() => $"Invalid start index: {startIndex}");
                 return;
             }
 
             if (endIndex < startIndex)
             {
-                Console.WriteLine("No slides to delete (endIndex < startIndex)");
+                Log(() => "No slides to delete (endIndex < startIndex)");
                 return;
             }
 
             // 确保 endIndex 不超过实际范围
             int actualEndIndex = Math.Min(endIndex, slideIdList.ChildElements.Count - 1);
             
-            Console.WriteLine($"Will delete slides from index {startIndex} to {actualEndIndex}");
+            Log(() => $"Will delete slides from index {startIndex} to {actualEndIndex}");
 
             // 收集要删除的 SlideId（从后往前，避免索引变化问题）
             var slidesToDelete = new List<P.SlideId>();
@@ -149,7 +175,7 @@ namespace AddNamedSheetView
                 }
             }
 
-            Console.WriteLine($"Found {slidesToDelete.Count} slides to delete");
+            Log(() => $"Found {slidesToDelete.Count} slides to delete");
 
             // 删除 slides（已经按倒序排列，从后往前删）
             int deletedCount = 0;
@@ -171,20 +197,20 @@ namespace AddNamedSheetView
                     slideId.Remove();
                     deletedCount++;
                     
-                    Console.WriteLine($"  Deleted slide with relationship ID: {relationshipId}");
+                    Log(() => $"  Deleted slide with relationship ID: {relationshipId}");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"  Failed to delete slide with relationship ID {relationshipId}: {ex.Message}");
+                    Log(() => $"  Failed to delete slide with relationship ID {relationshipId}: {ex.Message}");
                 }
             }
 
-            Console.WriteLine($"Successfully deleted {deletedCount} slides");
+            Log(() => $"Successfully deleted {deletedCount} slides");
         }
 
         private static void CopyAndReplaceLastSlideFromTemplate(PresentationPart presentationPart, int originalLastSlideIndex, JsonDocument doc)
         {
-            Console.WriteLine("\n=== Copying and Replacing Last Slide from Original Template ===");
+            Log(() => "\n=== Copying and Replacing Last Slide from Original Template ===");
 
             JsonElement root = doc.RootElement;
 
@@ -192,14 +218,14 @@ namespace AddNamedSheetView
             var slideIdList = presentationPart.Presentation.SlideIdList;
             if (slideIdList == null || slideIdList.ChildElements.Count == 0)
             {
-                Console.WriteLine("No slides found in presentation");
+                Log(() => "No slides found in presentation");
                 return;
             }
 
             // 确保原始索引有效
             if (originalLastSlideIndex < 0 || originalLastSlideIndex >= slideIdList.ChildElements.Count)
             {
-                Console.WriteLine($"Invalid original slide index: {originalLastSlideIndex}");
+                Log(() => $"Invalid original slide index: {originalLastSlideIndex}");
                 return;
             }
 
@@ -207,24 +233,24 @@ namespace AddNamedSheetView
             P.SlideId templateLastSlideId = slideIdList.ChildElements[originalLastSlideIndex] as P.SlideId;
             if (templateLastSlideId == null)
             {
-                Console.WriteLine("Cannot find template's last slide");
+                Log(() => "Cannot find template's last slide");
                 return;
             }
 
             SlidePart templateLastSlidePart = presentationPart.GetPartById(templateLastSlideId.RelationshipId) as SlidePart;
             if (templateLastSlidePart == null)
             {
-                Console.WriteLine("Cannot get template's last slide part");
+                Log(() => "Cannot get template's last slide part");
                 return;
             }
 
-            Console.WriteLine($"Found template's last slide (index {originalLastSlideIndex}), copying...");
+            Log(() => $"Found template's last slide (index {originalLastSlideIndex}), copying...");
 
             // 复制原始模板的最后一页
             SlidePart newSlidePart = CopySlide(presentationPart, templateLastSlidePart);
             if (newSlidePart == null)
             {
-                Console.WriteLine("Failed to copy template's last slide");
+                Log(() => "Failed to copy template's last slide");
                 return;
             }
 
@@ -235,19 +261,19 @@ namespace AddNamedSheetView
             if (TryGetJsonString(root, "endtitle", out var endTitleValue))
             {
                 replacements["{end_title}"] = endTitleValue;
-                Console.WriteLine($"  endtitle: {endTitleValue}");
+                Log(() => $"  endtitle: {endTitleValue}");
             }
 
             if (TryGetJsonString(root, "author", out var authorValue))
             {
                 replacements["{ppt_author}"] = authorValue;
-                Console.WriteLine($"  author: {authorValue}");
+                Log(() => $"  author: {authorValue}");
             }
 
             if (TryGetJsonString(root, "website", out var websiteValue))
             {
                 replacements["{ppt_website}"] = websiteValue;
-                Console.WriteLine($"  website: {websiteValue}");
+                Log(() => $"  website: {websiteValue}");
             }
 
             // 替换新 slide 中的占位符
@@ -258,12 +284,12 @@ namespace AddNamedSheetView
                 replacedCount += ReplaceShapePlaceholders(shape, replacements);
             }
 
-            Console.WriteLine($"Successfully copied template's last slide and replaced {replacedCount} placeholders");
+            Log(() => $"Successfully copied template's last slide and replaced {replacedCount} placeholders");
         }
 
         private static void GeneratePartSlidesFromJson(PresentationPart presentationPart, JsonDocument doc)
         {
-            Console.WriteLine("\n=== Generating Part Slides from JSON ===");
+            Log(() => "\n=== Generating Part Slides from JSON ===");
 
             JsonElement root = doc.RootElement;
             var chapter_title_search = "{part_title_";
@@ -272,7 +298,7 @@ namespace AddNamedSheetView
             // 获取 parts 数组
             if (!root.TryGetProperty("parts", out JsonElement partsArray))
             {
-                Console.WriteLine("JSON does not contain 'parts' array");
+                Log(() => "JSON does not contain 'parts' array");
                 return;
             }
 
@@ -281,11 +307,11 @@ namespace AddNamedSheetView
             
             if (templateSlides.Count == 0)
             {
-                Console.WriteLine("No slides found containing '{part_subtitle_' placeholder");
+                Log(() => "No slides found containing '{part_subtitle_' placeholder");
                 return;
             }
 
-            Console.WriteLine($"Found {templateSlides.Count} template slides containing '{{part_subtitle_}}'");
+            Log(() => $"Found {templateSlides.Count} template slides containing '{{part_subtitle_}}'");
 
             var random = new Random();
             var partTemplatePool = new Queue<SlidePart>();
@@ -297,29 +323,29 @@ namespace AddNamedSheetView
             {
                 if (!part.TryGetProperty("title", out JsonElement title))
                 {
-                    Console.WriteLine($"Part {partIndex} missing 'title' field, skipping");
+                    Log(() => $"Part {partIndex} missing 'title' field, skipping");
                     partIndex++;
                     continue;
                 }
 
                 string partTitle = title.GetString() ?? string.Empty;
-                Console.WriteLine($"\n--- Processing Part {partIndex}: {partTitle} ---");
+                Log(() => $"\n--- Processing Part {partIndex}: {partTitle} ---");
 
                 // 从模板 slides 中随机选择一个
                 var selectedTemplate = GetNextTemplate(templateSlides, partTemplatePool, random, ref lastPartTemplate);
                 if (selectedTemplate == null)
                 {
-                    Console.WriteLine("  Failed to select template slide, skipping");
+                    Log(() => "  Failed to select template slide, skipping");
                     partIndex++;
                     continue;
                 }
-                Console.WriteLine($"  Selected random template slide");
+                Log(() => $"  Selected random template slide");
 
                 // 复制 slide 并插入到最后
                 var newSlidePart = CopySlide(presentationPart, selectedTemplate);
                 if (newSlidePart == null)
                 {
-                    Console.WriteLine($"  Failed to copy slide for part {partIndex}");
+                    Log(() => $"  Failed to copy slide for part {partIndex}");
                     partIndex++;
                     continue;
                 }
@@ -341,7 +367,7 @@ namespace AddNamedSheetView
                 {
                     // 有 subtitle，添加到替换字典
                     replacements[chapter_subtitle_search] = partSubtitle;
-                    Console.WriteLine($"  Part subtitle: {partSubtitle}");
+                    Log(() => $"  Part subtitle: {partSubtitle}");
                 }
 
                 // 替换占位符
@@ -367,12 +393,12 @@ namespace AddNamedSheetView
 
                     foreach (var shape in shapesToDelete)
                     {
-                        Console.WriteLine($"  Deleting shape containing '{{part_subtitle}}' (subtitle is empty)");
+                        Log(() => $"  Deleting shape containing '{{part_subtitle}}' (subtitle is empty)");
                         DeleteShape(shape);
                     }
                 }
 
-                Console.WriteLine($"  Created new slide, replaced {replacedCount} placeholders");
+                Log(() => $"  Created new slide, replaced {replacedCount} placeholders");
                 
                 // 处理该 part 中的 chapters
                 if (part.TryGetProperty("chapters", out JsonElement chaptersArray))
@@ -383,13 +409,13 @@ namespace AddNamedSheetView
                 partIndex++;
             }
 
-            Console.WriteLine($"\n=== Generated {partIndex - 1} part slides ===");
+            Log(() => $"\n=== Generated {partIndex - 1} part slides ===");
         }
 
         // 为一个 part 生成 chapter slides
         private static void GenerateChapterSlidesForPart(PresentationPart presentationPart, JsonElement chaptersArray, int partIndex)
         {
-            Console.WriteLine($"\n  === Generating Chapter Slides for Part {partIndex} ===");
+            Log(() => $"\n  === Generating Chapter Slides for Part {partIndex} ===");
 
             var random = new Random();
             var chapterTemplatePool = new Queue<SlidePart>();
@@ -401,13 +427,13 @@ namespace AddNamedSheetView
             {
                 if (!chapter.TryGetProperty("title", out JsonElement chapterTitle))
                 {
-                    Console.WriteLine($"    Chapter {chapterIndex} missing 'title' field, skipping");
+                    Log(() => $"    Chapter {chapterIndex} missing 'title' field, skipping");
                     chapterIndex++;
                     continue;
                 }
 
                 string titleText = chapterTitle.GetString() ?? string.Empty;
-                Console.WriteLine($"\n    --- Processing Chapter {chapterIndex}: {titleText} ---");
+                Log(() => $"\n    --- Processing Chapter {chapterIndex}: {titleText} ---");
 
                 // 获取当前 chapter 的 sections（先声明变量）
                 JsonElement sectionsArray = default;
@@ -416,7 +442,7 @@ namespace AddNamedSheetView
                 
                 if (hasSections)
                 {
-                    Console.WriteLine($"      Chapter has {sectionsCount} sections");
+                    Log(() => $"      Chapter has {sectionsCount} sections");
                 }
 
                 // 查找适配当前 sections 数量的 slides（包含 {chapter_title} 占位符）
@@ -424,35 +450,35 @@ namespace AddNamedSheetView
                 
                 if (chapterTemplateSlides.Count == 0)
                 {
-                    Console.WriteLine($"      No slides found matching sections count {sectionsCount}, trying without section filter");
+                    Log(() => $"      No slides found matching sections count {sectionsCount}, trying without section filter");
                     // 如果没有找到适配的 slide，尝试不使用 section 筛选
                     chapterTemplateSlides = FindSlidesWithKeyword(presentationPart, "{chapter_title}");
                     
                     if (chapterTemplateSlides.Count == 0)
                     {
-                        Console.WriteLine("      No slides found containing '{chapter_title}' placeholder, skipping");
+                        Log(() => "      No slides found containing '{chapter_title}' placeholder, skipping");
                         chapterIndex++;
                         continue;
                     }
                 }
 
-                Console.WriteLine($"      Found {chapterTemplateSlides.Count} matching chapter template slides");
+                Log(() => $"      Found {chapterTemplateSlides.Count} matching chapter template slides");
 
                 // 从模板 slides 中随机选择一个
                 var selectedTemplate = GetNextTemplate(chapterTemplateSlides, chapterTemplatePool, random, ref lastChapterTemplate);
                 if (selectedTemplate == null)
                 {
-                    Console.WriteLine("      Failed to select chapter template slide, skipping");
+                    Log(() => "      Failed to select chapter template slide, skipping");
                     chapterIndex++;
                     continue;
                 }
-                Console.WriteLine($"      Selected random chapter template slide");
+                Log(() => $"      Selected random chapter template slide");
 
                 // 复制 slide 并插入到最后
                 var newSlidePart = CopySlide(presentationPart, selectedTemplate);
                 if (newSlidePart == null)
                 {
-                    Console.WriteLine($"      Failed to copy slide for chapter {chapterIndex}");
+                    Log(() => $"      Failed to copy slide for chapter {chapterIndex}");
                     chapterIndex++;
                     continue;
                 }
@@ -546,16 +572,16 @@ namespace AddNamedSheetView
 
                     foreach (var shape in shapesToDelete)
                     {
-                        Console.WriteLine($"      Deleting shape containing '{{chapter_subtitle}}' (subtitle is empty)");
+                        Log(() => $"      Deleting shape containing '{{chapter_subtitle}}' (subtitle is empty)");
                         DeleteShape(shape);
                     }
                 }
 
-                Console.WriteLine($"      Created chapter slide, replaced {replacedCount} placeholders");
+                Log(() => $"      Created chapter slide, replaced {replacedCount} placeholders");
                 chapterIndex++;
             }
 
-            Console.WriteLine($"  === Generated {chapterIndex - 1} chapter slides for Part {partIndex} ===");
+            Log(() => $"  === Generated {chapterIndex - 1} chapter slides for Part {partIndex} ===");
         }
 
         // 复制一个 slide 并插入到 presentation 的最后
@@ -746,7 +772,7 @@ namespace AddNamedSheetView
 
         private static void ReplaceFirstSlideWithJson(PresentationPart presentationPart, JsonDocument doc)
         {
-            Console.WriteLine("\n=== Replacing First Slide Placeholders with JSON Data ===");
+            Log(() => "\n=== Replacing First Slide Placeholders with JSON Data ===");
             
             JsonElement root = doc.RootElement;
 
@@ -759,20 +785,20 @@ namespace AddNamedSheetView
                 { "{ppt_website}", GetJsonString(root, "website") },
             };
 
-            Console.WriteLine("  Replacing values: " + string.Join(", ", replacements.Select(kvp => $"{kvp.Key}='{kvp.Value}'")));
+            Log(() => "  Replacing values: " + string.Join(", ", replacements.Select(kvp => $"{kvp.Key}='{kvp.Value}'")));
 
             // 获取第一页
             P.SlideId firstSlideId = presentationPart.Presentation.SlideIdList.ChildElements[0] as P.SlideId;
             if (firstSlideId == null)
             {
-                Console.WriteLine("Cannot find first slide");
+                Log(() => "Cannot find first slide");
                 return;
             }
 
             SlidePart firstSlidePart = presentationPart.GetPartById(firstSlideId.RelationshipId) as SlidePart;
             if (firstSlidePart == null)
             {
-                Console.WriteLine("Cannot get first slide part");
+                Log(() => "Cannot get first slide part");
                 return;
             }
 
@@ -784,19 +810,19 @@ namespace AddNamedSheetView
                 replacedCount += ReplaceShapePlaceholders(shape, replacements);
             }
             
-            Console.WriteLine($"Successfully replaced {replacedCount} placeholders on first slide");
+            Log(() => $"Successfully replaced {replacedCount} placeholders on first slide");
         }
 
         private static void ReplaceSecondSlideWithJson(PresentationPart presentationPart, JsonDocument doc)
         {
-            Console.WriteLine("\n=== Replacing Second Slide (TOC) with JSON Data ===");
+            Log(() => "\n=== Replacing Second Slide (TOC) with JSON Data ===");
 
             JsonElement root = doc.RootElement;
 
             // 获取 parts 数组
             if (!root.TryGetProperty("parts", out JsonElement partsArray))
             {
-                Console.WriteLine("JSON does not contain 'parts' array");
+                Log(() => "JSON does not contain 'parts' array");
                 return;
             }
 
@@ -810,20 +836,20 @@ namespace AddNamedSheetView
                 }
             }
 
-            Console.WriteLine($"Found {partTitles.Count} part titles in JSON");
+            Log(() => $"Found {partTitles.Count} part titles in JSON");
 
             // 获取第二页
             P.SlideId secondSlideId = presentationPart.Presentation.SlideIdList.ChildElements[1] as P.SlideId;
             if (secondSlideId == null)
             {
-                Console.WriteLine("Cannot find second slide");
+                Log(() => "Cannot find second slide");
                 return;
             }
 
             SlidePart secondSlidePart = presentationPart.GetPartById(secondSlideId.RelationshipId) as SlidePart;
             if (secondSlidePart == null)
             {
-                Console.WriteLine("Cannot get second slide part");
+                Log(() => "Cannot get second slide part");
                 return;
             }
 
@@ -844,7 +870,7 @@ namespace AddNamedSheetView
                     if (shapeText.Contains(placeholder))
                     {
                         placeholderShapes[i] = shape;
-                        Console.WriteLine($"Found placeholder '{placeholder}' in shape");
+                        Log(() => $"Found placeholder '{placeholder}' in shape");
                         break;
                     }
                 }
@@ -856,14 +882,14 @@ namespace AddNamedSheetView
                     if (shapeText.Contains(indexPlaceholder))
                     {
                         indexPlaceholderShapes[i] = shape;
-                        Console.WriteLine($"Found index placeholder '{indexPlaceholder}' in shape");
+                        Log(() => $"Found index placeholder '{indexPlaceholder}' in shape");
                         break;
                     }
                 }
             }
 
-            Console.WriteLine($"Found {placeholderShapes.Count} placeholder shapes");
-            Console.WriteLine($"Found {indexPlaceholderShapes.Count} index placeholder shapes");
+            Log(() => $"Found {placeholderShapes.Count} placeholder shapes");
+            Log(() => $"Found {indexPlaceholderShapes.Count} index placeholder shapes");
 
             // 处理占位符和标题的匹配（索引从1开始）
             int maxIndex = Math.Max(
@@ -878,19 +904,19 @@ namespace AddNamedSheetView
                 if (placeholderShapes.ContainsKey(i) && titleIndex < partTitles.Count)
                 {
                     // 有占位符且有对应的标题，进行替换
-                    Console.WriteLine($"  Replacing {{part_title_{i}}} with: '{partTitles[titleIndex]}'");
+                    Log(() => $"  Replacing {{part_title_{i}}} with: '{partTitles[titleIndex]}'");
                     ReplaceShapeContent(placeholderShapes[i], partTitles[titleIndex]);
                 }
                 else if (placeholderShapes.ContainsKey(i) && titleIndex >= partTitles.Count)
                 {
                     // 有占位符但没有对应的标题，删除形状
-                    Console.WriteLine($"  Deleting extra placeholder shape: {{part_title_{i}}}");
+                    Log(() => $"  Deleting extra placeholder shape: {{part_title_{i}}}");
                     DeleteShape(placeholderShapes[i]);
                 }
                 else if (!placeholderShapes.ContainsKey(i) && titleIndex < partTitles.Count)
                 {
                     // 有标题但没有占位符，跳过
-                    Console.WriteLine($"  Skipping title (no placeholder): '{partTitles[titleIndex]}'");
+                    Log(() => $"  Skipping title (no placeholder): '{partTitles[titleIndex]}'");
                 }
             }
 
@@ -907,18 +933,18 @@ namespace AddNamedSheetView
                 if (indexPlaceholderShapes.ContainsKey(i) && titleIndex < partTitles.Count)
                 {
                     // 有索引占位符且有对应的标题，用索引数字替换
-                    Console.WriteLine($"  Replacing {{p{i}}} with: '{i}'");
+                    Log(() => $"  Replacing {{p{i}}} with: '{i}'");
                     ReplaceShapeContent(indexPlaceholderShapes[i], i.ToString());
                 }
                 else if (indexPlaceholderShapes.ContainsKey(i) && titleIndex >= partTitles.Count)
                 {
                     // 有索引占位符但没有对应的标题，删除形状
-                    Console.WriteLine($"  Deleting extra index placeholder shape: {{p{i}}}");
+                    Log(() => $"  Deleting extra index placeholder shape: {{p{i}}}");
                     DeleteShape(indexPlaceholderShapes[i]);
                 }
             }
             
-            Console.WriteLine("Second slide updated successfully");
+            Log(() => "Second slide updated successfully");
         }
 
         private static void ReplaceShapeContent(P.Shape shape, string newContent)
@@ -1026,6 +1052,15 @@ namespace AddNamedSheetView
             return TryGetJsonString(element, propertyName, out var value) ? value : defaultValue;
         }
 
+        [Conditional("DEBUG")]
+        private static void Log(Func<string> messageFactory)
+        {
+            if (messageFactory != null)
+            {
+                Console.WriteLine(messageFactory());
+            }
+        }
+
         private static T? GetNextTemplate<T>(IList<T> source, Queue<T> pool, Random random, ref T? lastItem)
             where T : class
         {
@@ -1085,11 +1120,11 @@ namespace AddNamedSheetView
 
         private static void DeduplicateMediaResources(PresentationPart presentationPart)
         {
-            Console.WriteLine("\n=== Deduplicating Media Resources ===");
+            Log(() => "\n=== Deduplicating Media Resources ===");
 
             if (presentationPart?.Presentation?.SlideIdList == null)
             {
-                Console.WriteLine("Presentation is missing or has no slides");
+                Log(() => "Presentation is missing or has no slides");
                 return;
             }
 
@@ -1157,11 +1192,11 @@ namespace AddNamedSheetView
                     ReplaceRelationshipId(slidePart.Slide, relationshipId, newRelId);
                     slidePart.DeletePart(imagePart);
                     deduplicatedCount++;
-                    Console.WriteLine($"  Deduplicated image: {sourceUri} -> {targetUri}");
+                    Log(() => $"  Deduplicated image: {sourceUri} -> {targetUri}");
                 }
             }
 
-            Console.WriteLine(deduplicatedCount > 0
+            Log(() => deduplicatedCount > 0
                 ? $"Deduplicated {deduplicatedCount} duplicate images"
                 : "No duplicate images detected");
         }
@@ -1178,18 +1213,18 @@ namespace AddNamedSheetView
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"    Failed to hash image {imagePart.Uri}: {ex.Message}");
+                Log(() => $"    Failed to hash image {imagePart.Uri}: {ex.Message}");
                 return null;
             }
         }
 
         private static void CleanupUnusedMediaResources(PresentationPart presentationPart)
         {
-            Console.WriteLine("\n=== Cleaning Unused Media Resources ===");
+            Log(() => "\n=== Cleaning Unused Media Resources ===");
 
             if (presentationPart?.Presentation?.SlideIdList == null)
             {
-                Console.WriteLine("Presentation is missing or has no slides");
+                Log(() => "Presentation is missing or has no slides");
                 return;
             }
 
@@ -1205,7 +1240,7 @@ namespace AddNamedSheetView
                     continue;
                 }
 
-                Console.WriteLine($"  Checking slide {slidePart.Uri} for unused resources");
+                Log(() => $"  Checking slide {slidePart.Uri} for unused resources");
                 CleanupUnusedPartsOnSlide(slidePart);
             }
         }
@@ -1237,7 +1272,7 @@ namespace AddNamedSheetView
                 {
                     slidePart.DeletePart(part);
                     removedCount++;
-                    Console.WriteLine($"    Removed unused media part {part.Uri}");
+                    Log(() => $"    Removed unused media part {part.Uri}");
                 }
             }
 
@@ -1248,13 +1283,13 @@ namespace AddNamedSheetView
                 {
                     slidePart.DeleteReferenceRelationship(dataReference);
                     removedCount++;
-                    Console.WriteLine($"    Removed unused data reference {dataReference.Uri}");
+                    Log(() => $"    Removed unused data reference {dataReference.Uri}");
                 }
             }
 
             if (removedCount == 0)
             {
-                Console.WriteLine("    No unused media resources detected");
+                Log(() => "    No unused media resources detected");
             }
         }
 
@@ -1307,9 +1342,9 @@ namespace AddNamedSheetView
                 if (shapeFullText.Contains(kvp.Key))
                 {
                     // 找到占位符，用 JSON 值完全覆盖整个文本框内容
-                    Console.WriteLine($"  Found placeholder '{kvp.Key}' in shape");
-                    Console.WriteLine($"  Original text: '{shapeFullText.Trim()}'");
-                    Console.WriteLine($"  Replacing entire content with: '{kvp.Value}'");
+                    Log(() => $"  Found placeholder '{kvp.Key}' in shape");
+                    Log(() => $"  Original text: '{shapeFullText.Trim()}'");
+                    Log(() => $"  Replacing entire content with: '{kvp.Value}'");
 
                     SetShapeText(shape, kvp.Value);
 
