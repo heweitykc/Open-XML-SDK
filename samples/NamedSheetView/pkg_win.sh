@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "============================================"
-echo "Building Windows Executable in WSL"
+echo "Building Self-Contained Executables"
 echo "============================================"
 
 # 清理之前的发布文件
@@ -22,23 +22,42 @@ dotnet publish -c Release -r win-x64 \
 
 if [ $? -ne 0 ]; then
     echo ""
-    echo "Build failed!"
+    echo "Windows build failed!"
+    exit 1
+fi
+
+echo ""
+echo "Publishing for Linux x64 (net8.0)..."
+dotnet publish -c Release -r linux-x64 \
+    --framework net8.0 \
+    --self-contained true \
+    -p:PublishSingleFile=true \
+    -p:IncludeNativeLibrariesForSelfExtract=true \
+    -p:EnableCompressionInSingleFile=true \
+    -o publish/linux-x64
+
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "Linux build failed!"
     exit 1
 fi
 
 echo ""
 echo "============================================"
 echo "Build completed successfully!"
-echo "Output directory: publish/win-x64"
-echo "Executable: publish/win-x64/AddNamedSheetView.exe"
+echo "Outputs:"
+echo "  Windows: publish/win-x64/AddNamedSheetView.exe"
+echo "  Linux  : publish/linux-x64/AddNamedSheetView"
 echo "============================================"
 echo ""
 
 # 列出发布的文件
 ls -lh publish/win-x64/*.exe
+ls -lh publish/linux-x64/AddNamedSheetView
 
 echo ""
-echo "You can now run this exe in Windows:"
-echo "  publish/win-x64/AddNamedSheetView.exe"
+echo "You can now run the executables:"
+echo "  Windows: publish/win-x64/AddNamedSheetView.exe"
+echo "  Linux  : publish/linux-x64/AddNamedSheetView"
 echo ""
 

@@ -17,6 +17,12 @@ using System.Diagnostics;
 using A = DocumentFormat.OpenXml.Drawing;
 using P = DocumentFormat.OpenXml.Presentation;
 
+#nullable enable
+#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
+#pragma warning disable CS8602 // Dereference of a possibly null reference.
+#pragma warning disable CS8603 // Possible null reference return.
+#pragma warning disable CS8604 // Possible null reference argument.
+
 namespace AddNamedSheetView
 {
     public class Program
@@ -72,40 +78,42 @@ namespace AddNamedSheetView
                 File.Copy(sourceFilePath, outputPath, true);
                 Log(() => $"Created new file: {outputPath}");
 
-                using (PresentationDocument presentationDocument = PresentationDocument.Open(outputPath, true))
+            using (PresentationDocument presentationDocument = PresentationDocument.Open(outputPath, true))
                 {
-                    PresentationPart presentationPart = presentationDocument.PresentationPart;
+                    PresentationPart? presentationPart = presentationDocument.PresentationPart;
                     if (presentationPart?.Presentation?.SlideIdList == null)
                     {
                         throw new InvalidOperationException("Invalid presentation");
                     }
 
+                    PresentationPart ensuredPresentationPart = presentationPart!;
+
                     // 记录原始模板 PPT 的最后一页索引（在添加新 slides 之前）
-                    int originalLastSlideIndex = presentationPart.Presentation.SlideIdList.ChildElements.Count - 1;
+                    int originalLastSlideIndex = ensuredPresentationPart.Presentation!.SlideIdList!.ChildElements.Count - 1;
                     Log(() => $"Original template has {originalLastSlideIndex + 1} slides");
 
                     // 解析 JSON
                     using (JsonDocument doc = JsonDocument.Parse(jsonContent))
                     {
                         // 在新文件上进行操作
-                        ReplaceFirstSlideWithJson(presentationPart, doc);
-                        ReplaceSecondSlideWithJson(presentationPart, doc);
+                        ReplaceFirstSlideWithJson(ensuredPresentationPart, doc);
+                        ReplaceSecondSlideWithJson(ensuredPresentationPart, doc);
 
                         // 生成各个 part 的 slides
-                        GeneratePartSlidesFromJson(presentationPart, doc);
+                        GeneratePartSlidesFromJson(ensuredPresentationPart, doc);
 
                         // 从原始模板复制最后一页并替换结束页占位符
-                        CopyAndReplaceLastSlideFromTemplate(presentationPart, originalLastSlideIndex, doc);
+                        CopyAndReplaceLastSlideFromTemplate(ensuredPresentationPart, originalLastSlideIndex, doc);
 
                         //删除从索引 [2 - $originalLastSlideIndex] 的所有slides
-                        DeleteSlidesFromIndex(presentationPart, 2, originalLastSlideIndex);
+                        DeleteSlidesFromIndex(ensuredPresentationPart, 2, originalLastSlideIndex);
 
                         // 媒体资源去重与清理
-                        DeduplicateMediaResources(presentationPart);
-                        CleanupUnusedMediaResources(presentationPart);
+                        DeduplicateMediaResources(ensuredPresentationPart);
+                        CleanupUnusedMediaResources(ensuredPresentationPart);
                     }
 
-                    presentationPart.Presentation.Save();
+                    ensuredPresentationPart.Presentation!.Save();
                 }
 
                 Log(() => $"{outputPath} saved");
@@ -135,7 +143,7 @@ namespace AddNamedSheetView
         {
             Log(() => $"\n=== Deleting Original Template Slides from index {startIndex} to {endIndex} ===");
 
-            var slideIdList = presentationPart.Presentation.SlideIdList;
+            var slideIdList = presentationPart.Presentation?.SlideIdList;
             if (slideIdList == null || slideIdList.ChildElements.Count == 0)
             {
                 Log(() => "No slides found in presentation");
@@ -182,7 +190,11 @@ namespace AddNamedSheetView
             foreach (var slideId in slidesToDelete)
             {
                 // 获取 SlidePart 并删除
-                string relationshipId = slideId.RelationshipId;
+                string? relationshipId = slideId.RelationshipId;
+                if (string.IsNullOrEmpty(relationshipId))
+                {
+                    continue;
+                }
                 
                 try
                 {
@@ -215,7 +227,7 @@ namespace AddNamedSheetView
             JsonElement root = doc.RootElement;
 
             // 获取 slide 列表
-            var slideIdList = presentationPart.Presentation.SlideIdList;
+            var slideIdList = presentationPart.Presentation?.SlideIdList;
             if (slideIdList == null || slideIdList.ChildElements.Count == 0)
             {
                 Log(() => "No slides found in presentation");
@@ -237,7 +249,14 @@ namespace AddNamedSheetView
                 return;
             }
 
-            SlidePart templateLastSlidePart = presentationPart.GetPartById(templateLastSlideId.RelationshipId) as SlidePart;
+            string? templateLastRelationshipId = templateLastSlideId.RelationshipId;
+            if (string.IsNullOrEmpty(templateLastRelationshipId))
+            {
+                Log(() => "Template last slide relationship ID is null");
+                return;
+            }
+
+            SlidePart templateLastSlidePart = presentationPart.GetPartById(templateLastRelationshipId) as SlidePart;
             if (templateLastSlidePart == null)
             {
                 Log(() => "Cannot get template's last slide part");
