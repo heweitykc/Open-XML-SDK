@@ -347,9 +347,7 @@ namespace AddNamedSheetView
             Log(() => $"Found {templateSlides.Count} template slides containing '{{part_subtitle_}}'");
 
             var random = new Random();
-            var partTemplatePool = new Queue<SlidePart>();
-            var sectionTemplatePool = new Queue<SlidePart>();
-            SlidePart? lastPartTemplate = null;
+            var partTemplateSelector = new TemplateSelector<SlidePart>(random);
             int partIndex = 1;
 
             // 遍历 JSON 中的每个 part
@@ -366,7 +364,7 @@ namespace AddNamedSheetView
                 Log(() => $"\n--- Processing Part {partIndex}: {partTitle} ---");
 
                 // 从模板 slides 中随机选择一个
-                var selectedTemplate = GetNextTemplate(templateSlides, partTemplatePool, random, ref lastPartTemplate);
+                var selectedTemplate = partTemplateSelector.GetNext(templateSlides);
                 if (selectedTemplate == null)
                 {
                     Log(() => "  Failed to select template slide, skipping");
@@ -452,8 +450,7 @@ namespace AddNamedSheetView
             Log(() => $"\n  === Generating Chapter Slides for Part {partIndex} ===");
 
             var random = new Random();
-            var chapterTemplatePool = new Queue<SlidePart>();
-            SlidePart? lastChapterTemplate = null;
+            var chapterTemplateSelector = new TemplateSelector<SlidePart>(random);
             int chapterIndex = 1;
 
             // 遍历每个 chapter
@@ -504,7 +501,7 @@ namespace AddNamedSheetView
                 Log(() => $"      Found {chapterTemplateSlides.Count} matching chapter template slides");
 
                 // 从模板 slides 中随机选择一个
-                var selectedTemplate = GetNextTemplate(chapterTemplateSlides, chapterTemplatePool, random, ref lastChapterTemplate);
+                var selectedTemplate = chapterTemplateSelector.GetNext(chapterTemplateSlides);
                 if (selectedTemplate == null)
                 {
                     Log(() => "      Failed to select chapter template slide, skipping");
@@ -1128,61 +1125,133 @@ namespace AddNamedSheetView
             }
         }
 
-        private static T? GetNextTemplate<T>(IList<T> source, Queue<T> pool, Random random, ref T? lastItem)
-            where T : class
+        private sealed class TemplateSelector<T> where T : class
         {
-            if (source == null || source.Count == 0)
+            private readonly Random _random;
+            private readonly Queue<T> _pool = new Queue<T>();
+            private T? _last;
+
+            public TemplateSelector(Random random)
             {
-                return null;
+                _random = random ?? throw new ArgumentNullException(nameof(random));
             }
 
-            if (pool.Count == 0)
+            public T? GetNext(IList<T> candidates)
             {
-                var shuffled = ShuffleWithoutStartingRepeat(source, random, lastItem);
+                if (candidates == null || candidates.Count == 0)
+                {
+                    return null;
+                }
+
+                var uniqueCandidates = Deduplicate(candidates);
+                if (uniqueCandidates.Count == 0)
+                {
+                    return null;
+                }
+
+                var candidateSet = new HashSet<T>(uniqueCandidates);
+
+                if (_last != null && !candidateSet.Contains(_last))
+                {
+                    _last = null;
+                }
+
+                if (_pool.Count == 0)
+                {
+                    RefillPool(uniqueCandidates, candidateSet);
+                }
+
+                var next = DequeueValid(candidateSet);
+                if (next == null)
+                {
+                    _last = null;
+                    RefillPool(uniqueCandidates, candidateSet);
+                    next = DequeueValid(candidateSet);
+                }
+
+                if (next != null)
+                {
+                    _last = next;
+                }
+
+                return next;
+            }
+
+            private static List<T> Deduplicate(IList<T> source)
+            {
+                var result = new List<T>();
+                var seen = new HashSet<T>();
+                foreach (var item in source)
+                {
+                    if (item == null)
+                    {
+                        continue;
+                    }
+
+                    if (seen.Add(item))
+                    {
+                        result.Add(item);
+                    }
+                }
+
+                return result;
+            }
+
+            private void RefillPool(List<T> candidates, HashSet<T> candidateSet)
+            {
+                if (candidates.Count == 0)
+                {
+                    return;
+                }
+
+                var shuffled = new List<T>(candidates);
+                for (int i = shuffled.Count - 1; i > 0; i--)
+                {
+                    int swapIndex = _random.Next(i + 1);
+                    (shuffled[i], shuffled[swapIndex]) = (shuffled[swapIndex], shuffled[i]);
+                }
+
+                if (_last != null && shuffled.Count > 1 && EqualityComparer<T>.Default.Equals(shuffled[0], _last))
+                {
+                    int swapIndex = _random.Next(1, shuffled.Count);
+                    (shuffled[0], shuffled[swapIndex]) = (shuffled[swapIndex], shuffled[0]);
+                }
+
                 foreach (var item in shuffled)
                 {
-                    pool.Enqueue(item);
-                }
-            }
-
-            if (pool.Count == 0)
-            {
-                return null;
-            }
-
-            var next = pool.Dequeue();
-            lastItem = next;
-            return next;
-        }
-
-        private static List<T> ShuffleWithoutStartingRepeat<T>(IList<T> source, Random random, T? lastItem)
-            where T : class
-        {
-            var shuffled = new List<T>(source);
-
-            for (int i = shuffled.Count - 1; i > 0; i--)
-            {
-                int swapIndex = random.Next(i + 1);
-                var temp = shuffled[i];
-                shuffled[i] = shuffled[swapIndex];
-                shuffled[swapIndex] = temp;
-            }
-
-            if (lastItem != null && shuffled.Count > 1 && EqualityComparer<T>.Default.Equals(shuffled[0], lastItem))
-            {
-                for (int i = 1; i < shuffled.Count; i++)
-                {
-                    if (!EqualityComparer<T>.Default.Equals(shuffled[i], lastItem))
+                    if (candidateSet.Contains(item))
                     {
-                        var temp = shuffled[0];
-                        shuffled[0] = shuffled[i];
-                        shuffled[i] = temp;
-                        break;
+                        _pool.Enqueue(item);
                     }
                 }
             }
 
-            return shuffled;
+            private T? DequeueValid(HashSet<T> candidateSet)
+            {
+                while (_pool.Count > 0)
+                {
+                    var candidate = _pool.Dequeue();
+                    if (candidate == null || !candidateSet.Contains(candidate))
+                    {
+                        continue;
+                    }
+
+                    if (_last != null && EqualityComparer<T>.Default.Equals(candidate, _last))
+                    {
+                        if (candidateSet.Count == 1)
+                        {
+                            return candidate;
+                        }
+
+                        _pool.Enqueue(candidate);
+                        continue;
+                    }
+
+                    return candidate;
+                }
+
+                return null;
+            }
         }
 
         private static void DeduplicateMediaResources(PresentationPart presentationPart)
@@ -1337,9 +1406,12 @@ namespace AddNamedSheetView
 
                 if (!referencedIds.Contains(relationshipId))
                 {
+                    string? partUri = SafeGetPartUri(part);
                     slidePart.DeletePart(part);
                     removedCount++;
-                    Log(() => $"    Removed unused media part {part.Uri}");
+                    Log(() => partUri != null
+                        ? $"    Removed unused media part {partUri}"
+                        : $"    Removed unused media part (relationship {relationshipId})");
                 }
             }
 
@@ -1348,9 +1420,12 @@ namespace AddNamedSheetView
             {
                 if (!referencedIds.Contains(dataReference.Id))
                 {
+                    string? dataUri = dataReference.Uri?.ToString();
                     slidePart.DeleteReferenceRelationship(dataReference);
                     removedCount++;
-                    Log(() => $"    Removed unused data reference {dataReference.Uri}");
+                    Log(() => dataUri != null
+                        ? $"    Removed unused data reference {dataUri}"
+                        : $"    Removed unused data reference (relationship {dataReference.Id})");
                 }
             }
 
@@ -1390,6 +1465,27 @@ namespace AddNamedSheetView
                 || part is EmbeddedPackagePart
                 || part is EmbeddedObjectPart
                 || part is VmlDrawingPart;
+        }
+
+        private static string? SafeGetPartUri(OpenXmlPart? part)
+        {
+            if (part == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return part.Uri?.ToString();
+            }
+            catch (ObjectDisposedException)
+            {
+                return null;
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
         }
 
         private static int ReplaceShapePlaceholders(P.Shape shape, Dictionary<string, string> replacements)
