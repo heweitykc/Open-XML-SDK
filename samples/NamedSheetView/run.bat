@@ -1,0 +1,1 @@
+publish\win-x64\AddNamedSheetView.exe D:\work\aippt\1149795_8.pptx  D:\work\palmmob3_server\cron\output\full_ai_ppt.json

@@ -34,17 +34,19 @@ namespace AddNamedSheetView
                 Common.ExampleUtilities.ShowHelp(new string[]
                 {
                     "NamedSheetView: ",
-                    "Usage: NamedSheetView <filename> [jsonfile]",
+                    "Usage: NamedSheetView <filename> [jsonfile] [outputPath]",
                     "Where: <filename> is the .xlsx file in which to add a named sheet view.",
                     "       or .pptx file to copy slide 2 and insert at the end.",
                     "       [jsonfile] (optional) JSON file with PPT outline data to replace first slide placeholders.",
+                    "       [outputPath] (optional) Output file path. If omitted, a path is generated automatically.",
                 });
                 return;
             }
 
                 try
                 {
-                    string outputPath = GeneratePresentation(args[0], args[1]);
+                    string? outputPathArgument = args.Length > 2 ? args[2] : null;
+                    string outputPath = GeneratePresentation(args[0], args[1], outputPathArgument);
                     Console.WriteLine(outputPath);
                 }
                 catch (Exception ex)
@@ -57,7 +59,7 @@ namespace AddNamedSheetView
                 }
         }
 
-            public static string GeneratePresentation(string sourceFilePath, string jsonFilePath)
+            public static string GeneratePresentation(string sourceFilePath, string jsonFilePath, string? outputFilePath = null)
             {
                 if (string.IsNullOrWhiteSpace(sourceFilePath))
                 {
@@ -72,7 +74,7 @@ namespace AddNamedSheetView
                 string jsonContent = File.ReadAllText(jsonFilePath);
 
                 // 生成输出文件名
-                string outputPath = GenerateOutputPath(sourceFilePath);
+                string outputPath = ResolveOutputPath(sourceFilePath, outputFilePath);
 
                 // 复制源文件到新文件
                 File.Copy(sourceFilePath, outputPath, true);
@@ -119,6 +121,21 @@ namespace AddNamedSheetView
                 Log(() => $"{outputPath} saved");
                 return outputPath;
             }
+
+        private static string ResolveOutputPath(string inputPath, string? providedOutputPath)
+        {
+            if (!string.IsNullOrWhiteSpace(providedOutputPath))
+            {
+                string? directory = Path.GetDirectoryName(providedOutputPath);
+                if (!string.IsNullOrWhiteSpace(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+                return providedOutputPath;
+            }
+
+            return GenerateOutputPath(inputPath);
+        }
 
         private static string GenerateOutputPath(string inputPath)
         {
@@ -331,6 +348,7 @@ namespace AddNamedSheetView
 
             var random = new Random();
             var partTemplatePool = new Queue<SlidePart>();
+            var sectionTemplatePool = new Queue<SlidePart>();
             SlidePart? lastPartTemplate = null;
             int partIndex = 1;
 
@@ -463,6 +481,11 @@ namespace AddNamedSheetView
 
                 // 查找适配当前 sections 数量的 slides（包含 {chapter_title} 占位符）
                 var chapterTemplateSlides = FindSlidesWithKeyword(presentationPart, "{chapter_title}", sectionsCount);
+                for (int i = 0; i < chapterTemplateSlides.Count; i++)
+                {
+                    int templateIndex = GetSlideIndex(presentationPart, chapterTemplateSlides[i]);
+                    Log(() => $"      chapterTemplateSlides[{i}] found at template index {templateIndex}");
+                }
                 
                 if (chapterTemplateSlides.Count == 0)
                 {
@@ -488,7 +511,8 @@ namespace AddNamedSheetView
                     chapterIndex++;
                     continue;
                 }
-                Log(() => $"      Selected random chapter template slide");
+                int selectedTemplateIndex = GetSlideIndex(presentationPart, selectedTemplate);
+                Log(() => $"      Selected random chapter template slide, at template index {selectedTemplateIndex}");
 
                 // 复制 slide 并插入到最后
                 var newSlidePart = CopySlide(presentationPart, selectedTemplate);
@@ -784,6 +808,33 @@ namespace AddNamedSheetView
             }
 
             return matchedSlides;
+        }
+
+        private static int GetSlideIndex(PresentationPart presentationPart, SlidePart slidePart)
+        {
+            var slideIdList = presentationPart.Presentation?.SlideIdList;
+            if (slideIdList == null)
+            {
+                return -1;
+            }
+
+            string? relationshipId = presentationPart.GetIdOfPart(slidePart);
+            if (string.IsNullOrEmpty(relationshipId))
+            {
+                return -1;
+            }
+
+            int index = 0;
+            foreach (var slideId in slideIdList.Elements<P.SlideId>())
+            {
+                if (string.Equals(slideId.RelationshipId, relationshipId, StringComparison.Ordinal))
+                {
+                    return index;
+                }
+                index++;
+            }
+
+            return -1;
         }
 
         private static void ReplaceFirstSlideWithJson(PresentationPart presentationPart, JsonDocument doc)
