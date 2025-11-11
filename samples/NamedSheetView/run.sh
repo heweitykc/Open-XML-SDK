@@ -1,9 +1,1 @@
 dotnet run --no-restore  --framework net8.0 -- /mnt/d/work/aippt/1149795_8.pptx  /mnt/d/work/palmmob3_server/cron/output/full_ai_ppt.json /home/palmmob3/www/ai_ppt_generator/test100.pptx
-dotnet run --no-restore  --framework net8.0 -- /mnt/d/work/aippt/1149795_8.pptx  /mnt/d/work/palmmob3_server/cron/output/full_ai_ppt.json /home/palmmob3/www/ai_ppt_generator/test101.pptx
-dotnet run --no-restore  --framework net8.0 -- /mnt/d/work/aippt/1149795_8.pptx  /mnt/d/work/palmmob3_server/cron/output/full_ai_ppt.json /home/palmmob3/www/ai_ppt_generator/test102.pptx
-dotnet run --no-restore  --framework net8.0 -- /mnt/d/work/aippt/1149795_8.pptx  /mnt/d/work/palmmob3_server/cron/output/full_ai_ppt.json /home/palmmob3/www/ai_ppt_generator/test103.pptx
-dotnet run --no-restore  --framework net8.0 -- /mnt/d/work/aippt/1149795_8.pptx  /mnt/d/work/palmmob3_server/cron/output/full_ai_ppt.json /home/palmmob3/www/ai_ppt_generator/test104.pptx
-dotnet run --no-restore  --framework net8.0 -- /mnt/d/work/aippt/1149795_8.pptx  /mnt/d/work/palmmob3_server/cron/output/full_ai_ppt.json /home/palmmob3/www/ai_ppt_generator/test105.pptx
-dotnet run --no-restore  --framework net8.0 -- /mnt/d/work/aippt/1149795_8.pptx  /mnt/d/work/palmmob3_server/cron/output/full_ai_ppt.json /home/palmmob3/www/ai_ppt_generator/test106.pptx
-dotnet run --no-restore  --framework net8.0 -- /mnt/d/work/aippt/1149795_8.pptx  /mnt/d/work/palmmob3_server/cron/output/full_ai_ppt.json /home/palmmob3/www/ai_ppt_generator/test107.pptx
-dotnet run --no-restore  --framework net8.0 -- /mnt/d/work/aippt/1149795_8.pptx  /mnt/d/work/palmmob3_server/cron/output/full_ai_ppt.json /home/palmmob3/www/ai_ppt_generator/test108.pptx

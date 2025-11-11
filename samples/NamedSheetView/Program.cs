@@ -80,7 +80,7 @@ namespace AddNamedSheetView
                 File.Copy(sourceFilePath, outputPath, true);
                 Log(() => $"Created new file: {outputPath}");
 
-            using (PresentationDocument presentationDocument = PresentationDocument.Open(outputPath, true))
+                using (PresentationDocument presentationDocument = PresentationDocument.Open(outputPath, true))
                 {
                     PresentationPart? presentationPart = presentationDocument.PresentationPart;
                     if (presentationPart?.Presentation?.SlideIdList == null)
@@ -98,21 +98,21 @@ namespace AddNamedSheetView
                     using (JsonDocument doc = JsonDocument.Parse(jsonContent))
                     {
                         // 在新文件上进行操作
-                        ReplaceFirstSlideWithJson(ensuredPresentationPart, doc);
-                        ReplaceSecondSlideWithJson(ensuredPresentationPart, doc);
+                        Measure("ReplaceFirstSlideWithJson", () => ReplaceFirstSlideWithJson(ensuredPresentationPart, doc));
+                        Measure("ReplaceSecondSlideWithJson", () => ReplaceSecondSlideWithJson(ensuredPresentationPart, doc));
 
                         // 生成各个 part 的 slides
-                        GeneratePartSlidesFromJson(ensuredPresentationPart, doc);
+                        Measure("GeneratePartSlidesFromJson", () => GeneratePartSlidesFromJson(ensuredPresentationPart, doc));
 
                         // 从原始模板复制最后一页并替换结束页占位符
-                        CopyAndReplaceLastSlideFromTemplate(ensuredPresentationPart, originalLastSlideIndex, doc);
+                        Measure("CopyAndReplaceLastSlideFromTemplate", () => CopyAndReplaceLastSlideFromTemplate(ensuredPresentationPart, originalLastSlideIndex, doc));
 
                         //删除从索引 [2 - $originalLastSlideIndex] 的所有slides
-                        DeleteSlidesFromIndex(ensuredPresentationPart, 2, originalLastSlideIndex);
+                        Measure("DeleteSlidesFromIndex", () => DeleteSlidesFromIndex(ensuredPresentationPart, 2, originalLastSlideIndex));
 
                         // 媒体资源去重与清理
-                        DeduplicateMediaResources(ensuredPresentationPart);
-                        CleanupUnusedMediaResources(ensuredPresentationPart);
+                        Measure("DeduplicateMediaResources", () => DeduplicateMediaResources(ensuredPresentationPart));
+                        Measure("CleanupUnusedMediaResources", () => CleanupUnusedMediaResources(ensuredPresentationPart));
                     }
 
                     ensuredPresentationPart.Presentation!.Save();
@@ -478,24 +478,15 @@ namespace AddNamedSheetView
 
                 // 查找适配当前 sections 数量的 slides（包含 {chapter_title} 占位符）
                 var chapterTemplateSlides = FindSlidesWithKeyword(presentationPart, "{chapter_title}", sectionsCount);
-                for (int i = 0; i < chapterTemplateSlides.Count; i++)
-                {
-                    int templateIndex = GetSlideIndex(presentationPart, chapterTemplateSlides[i]);
-                    Log(() => $"      chapterTemplateSlides[{i}] found at template index {templateIndex}");
-                }
+                // for (int i = 0; i < chapterTemplateSlides.Count; i++)
+                // {
+                //     int templateIndex = GetSlideIndex(presentationPart, chapterTemplateSlides[i]);
+                //     Log(() => $"      chapterTemplateSlides[{i}] found at template index {templateIndex}");
+                // }
                 
                 if (chapterTemplateSlides.Count == 0)
-                {
-                    Log(() => $"      No slides found matching sections count {sectionsCount}, trying without section filter");
-                    // 如果没有找到适配的 slide，尝试不使用 section 筛选
-                    chapterTemplateSlides = FindSlidesWithKeyword(presentationPart, "{chapter_title}");
-                    
-                    if (chapterTemplateSlides.Count == 0)
-                    {
-                        Log(() => "      No slides found containing '{chapter_title}' placeholder, skipping");
-                        chapterIndex++;
-                        continue;
-                    }
+                {                    
+                    throw new ArgumentException("No slides found matching sections count {sectionsCount}, trying without section filter");
                 }
 
                 Log(() => $"      Found {chapterTemplateSlides.Count} matching chapter template slides");
@@ -1114,6 +1105,25 @@ namespace AddNamedSheetView
         private static string GetJsonString(JsonElement element, string propertyName, string defaultValue = "")
         {
             return TryGetJsonString(element, propertyName, out var value) ? value : defaultValue;
+        }
+
+        private static void Measure(string label, Action action)
+        {
+            if (action == null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            var stopwatch = Stopwatch.StartNew();
+            try
+            {
+                action();
+            }
+            finally
+            {
+                stopwatch.Stop();
+                Log(() => $"[Timing] {label} took {stopwatch.ElapsedMilliseconds} ms");
+            }
         }
 
         [Conditional("DEBUG")]
