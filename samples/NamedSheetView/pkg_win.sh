@@ -4,37 +4,28 @@ echo "============================================"
 echo "Building Self-Contained Executables"
 echo "============================================"
 
+# 禁用 NuGet 漏洞扫描以避免离线环境报错
+export DOTNET_NUGET_VULNERABILITYAUDITING=0
+export NUGET_DISABLE_VULNERABILITY_CHECKS=true
+
 # 清理之前的发布文件
 if [ -d "publish" ]; then
     rm -rf publish
 fi
 
-# 发布为 Windows x64 自包含可执行文件
-echo ""
-echo "Publishing for Windows x64 (net8.0)..."
-dotnet publish -c Release -r win-x64 \
-    --framework net8.0 \
-    --self-contained true \
-    -p:PublishSingleFile=true \
-    -p:IncludeNativeLibrariesForSelfExtract=true \
-    -p:EnableCompressionInSingleFile=true \
-    -o publish/win-x64
-
-if [ $? -ne 0 ]; then
-    echo ""
-    echo "Windows build failed!"
-    exit 1
-fi
-
 echo ""
 echo "Publishing for Linux x64 (net8.0)..."
-dotnet publish -c Release -r linux-x64 \
+DOTNET_DISABLE_VULNERABILITY_CHECKS=1 dotnet publish -c Release -r linux-x64 \
     --framework net8.0 \
     --self-contained true \
     -p:PublishSingleFile=true \
     -p:IncludeNativeLibrariesForSelfExtract=true \
-    -p:EnableCompressionInSingleFile=true \
+    -p:EnableCompressionInSingleFile=false \
+    -p:PublishReadyToRun=true \
+    -p:EnablePackageVulnerabilityAudit=false \
+    -p:NuGetAudit=false \
     -o publish/linux-x64
+
 
 if [ $? -ne 0 ]; then
     echo ""
@@ -42,22 +33,23 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo ""
-echo "============================================"
-echo "Build completed successfully!"
-echo "Outputs:"
-echo "  Windows: publish/win-x64/AddNamedSheetView.exe"
-echo "  Linux  : publish/linux-x64/AddNamedSheetView"
-echo "============================================"
-echo ""
+# 发布为 Windows x64 自包含可执行文件
+# echo ""
+# echo "Publishing for Windows x64 (net8.0)..."
+# DOTNET_DISABLE_VULNERABILITY_CHECKS=1 dotnet publish -c Release -r win-x64 \
+#     --framework net8.0 \
+#     --self-contained true \
+#     -p:PublishSingleFile=true \
+#     -p:IncludeNativeLibrariesForSelfExtract=true \
+#     -p:EnableCompressionInSingleFile=false \
+#     -p:PublishReadyToRun=true \
+#     -p:EnablePackageVulnerabilityAudit=false \
+#     -p:NuGetAudit=false \
+#     -o publish/win-x64
 
-# 列出发布的文件
-ls -lh publish/win-x64/*.exe
-ls -lh publish/linux-x64/AddNamedSheetView
-
-echo ""
-echo "You can now run the executables:"
-echo "  Windows: publish/win-x64/AddNamedSheetView.exe"
-echo "  Linux  : publish/linux-x64/AddNamedSheetView"
-echo ""
+# if [ $? -ne 0 ]; then
+#     echo ""
+#     echo "Windows build failed!"
+#     exit 1
+# fi
 
