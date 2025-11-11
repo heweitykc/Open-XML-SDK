@@ -244,37 +244,32 @@ namespace AddNamedSheetView
             var slideIdList = presentationPart.Presentation?.SlideIdList;
             if (slideIdList == null || slideIdList.ChildElements.Count == 0)
             {
-                Log(() => "No slides found in presentation");
-                return;
+                throw new ArgumentException("No slides found in presentation");
             }
 
             // 确保原始索引有效
             if (originalLastSlideIndex < 0 || originalLastSlideIndex >= slideIdList.ChildElements.Count)
-            {
-                Log(() => $"Invalid original slide index: {originalLastSlideIndex}");
-                return;
+            {                
+                throw new ArgumentException($"Invalid original slide index: {originalLastSlideIndex}");
             }
 
             // 获取原始模板的最后一个 slide (使用记录的索引)
             P.SlideId templateLastSlideId = slideIdList.ChildElements[originalLastSlideIndex] as P.SlideId;
             if (templateLastSlideId == null)
             {
-                Log(() => "Cannot find template's last slide");
-                return;
+                throw new ArgumentException("Cannot find template's last slide");
             }
 
             string? templateLastRelationshipId = templateLastSlideId.RelationshipId;
             if (string.IsNullOrEmpty(templateLastRelationshipId))
             {
-                Log(() => "Template last slide relationship ID is null");
-                return;
+                throw new ArgumentException("Template last slide relationship ID is null");
             }
 
             SlidePart templateLastSlidePart = presentationPart.GetPartById(templateLastRelationshipId) as SlidePart;
             if (templateLastSlidePart == null)
-            {
-                Log(() => "Cannot get template's last slide part");
-                return;
+            {                
+                throw new ArgumentException("Cannot get template's last slide part");
             }
 
             Log(() => $"Found template's last slide (index {originalLastSlideIndex}), copying...");
@@ -282,9 +277,8 @@ namespace AddNamedSheetView
             // 复制原始模板的最后一页
             SlidePart newSlidePart = CopySlide(presentationPart, templateLastSlidePart);
             if (newSlidePart == null)
-            {
-                Log(() => "Failed to copy template's last slide");
-                return;
+            {                
+                throw new ArgumentException("Failed to copy template's last slide");                
             }
 
             // 准备替换值
@@ -330,9 +324,8 @@ namespace AddNamedSheetView
 
             // 获取 parts 数组
             if (!root.TryGetProperty("parts", out JsonElement partsArray))
-            {
-                Log(() => "JSON does not contain 'parts' array");
-                return;
+            {                
+                throw new ArgumentException("JSON does not contain 'parts' array");
             }
 
             // 查找所有包含 {part_subtitle_ 的 slides
@@ -340,8 +333,7 @@ namespace AddNamedSheetView
             
             if (templateSlides.Count == 0)
             {
-                Log(() => "No slides found containing '{part_subtitle_' placeholder");
-                return;
+                throw new ArgumentException("No slides found containing '{part_subtitle_' placeholder");
             }
 
             Log(() => $"Found {templateSlides.Count} template slides containing '{{part_subtitle_}}'");
@@ -355,9 +347,7 @@ namespace AddNamedSheetView
             {
                 if (!part.TryGetProperty("title", out JsonElement title))
                 {
-                    Log(() => $"Part {partIndex} missing 'title' field, skipping");
-                    partIndex++;
-                    continue;
+                    throw new ArgumentException($"Part {partIndex} is missing required 'title' field.");
                 }
 
                 string partTitle = title.GetString() ?? string.Empty;
@@ -367,9 +357,7 @@ namespace AddNamedSheetView
                 var selectedTemplate = partTemplateSelector.GetNext(templateSlides);
                 if (selectedTemplate == null)
                 {
-                    Log(() => "  Failed to select template slide, skipping");
-                    partIndex++;
-                    continue;
+                    throw new ArgumentException("Failed to select template slide for part generation.");
                 }
                 Log(() => $"  Selected random template slide");
 
@@ -377,9 +365,7 @@ namespace AddNamedSheetView
                 var newSlidePart = CopySlide(presentationPart, selectedTemplate);
                 if (newSlidePart == null)
                 {
-                    Log(() => $"  Failed to copy slide for part {partIndex}");
-                    partIndex++;
-                    continue;
+                    throw new ArgumentException($"Failed to copy slide for part {partIndex}.");
                 }
 
                 // 准备替换字典
@@ -458,9 +444,7 @@ namespace AddNamedSheetView
             {
                 if (!chapter.TryGetProperty("title", out JsonElement chapterTitle))
                 {
-                    Log(() => $"    Chapter {chapterIndex} missing 'title' field, skipping");
-                    chapterIndex++;
-                    continue;
+                    throw new ArgumentException($"Chapter {chapterIndex} missing 'title' field.");
                 }
 
                 string titleText = chapterTitle.GetString() ?? string.Empty;
@@ -486,7 +470,7 @@ namespace AddNamedSheetView
                 
                 if (chapterTemplateSlides.Count == 0)
                 {                    
-                    throw new ArgumentException("No slides found matching sections count {sectionsCount}, trying without section filter");
+                    throw new ArgumentException($"No slides found matching sections count {sectionsCount}.");
                 }
 
                 Log(() => $"      Found {chapterTemplateSlides.Count} matching chapter template slides");
@@ -495,9 +479,7 @@ namespace AddNamedSheetView
                 var selectedTemplate = chapterTemplateSelector.GetNext(chapterTemplateSlides);
                 if (selectedTemplate == null)
                 {
-                    Log(() => "      Failed to select chapter template slide, skipping");
-                    chapterIndex++;
-                    continue;
+                    throw new ArgumentException("Failed to select chapter template slide.");
                 }
                 int selectedTemplateIndex = GetSlideIndex(presentationPart, selectedTemplate);
                 Log(() => $"      Selected random chapter template slide, at template index {selectedTemplateIndex}");
@@ -506,9 +488,7 @@ namespace AddNamedSheetView
                 var newSlidePart = CopySlide(presentationPart, selectedTemplate);
                 if (newSlidePart == null)
                 {
-                    Log(() => $"      Failed to copy slide for chapter {chapterIndex}");
-                    chapterIndex++;
-                    continue;
+                    throw new ArgumentException($"Failed to copy slide for chapter {chapterIndex}.");
                 }
 
                 // 构建替换字典
@@ -846,15 +826,13 @@ namespace AddNamedSheetView
             P.SlideId firstSlideId = presentationPart.Presentation.SlideIdList.ChildElements[0] as P.SlideId;
             if (firstSlideId == null)
             {
-                Log(() => "Cannot find first slide");
-                return;
+                throw new ArgumentException("Cannot find first slide");
             }
 
             SlidePart firstSlidePart = presentationPart.GetPartById(firstSlideId.RelationshipId) as SlidePart;
             if (firstSlidePart == null)
             {
-                Log(() => "Cannot get first slide part");
-                return;
+                throw new ArgumentException("Cannot get first slide part");
             }
 
             // 替换所有形状中的占位符文本
@@ -877,8 +855,7 @@ namespace AddNamedSheetView
             // 获取 parts 数组
             if (!root.TryGetProperty("parts", out JsonElement partsArray))
             {
-                Log(() => "JSON does not contain 'parts' array");
-                return;
+                throw new ArgumentException("JSON does not contain 'parts' array");
             }
 
             // 提取所有 part titles
@@ -897,15 +874,13 @@ namespace AddNamedSheetView
             P.SlideId secondSlideId = presentationPart.Presentation.SlideIdList.ChildElements[1] as P.SlideId;
             if (secondSlideId == null)
             {
-                Log(() => "Cannot find second slide");
-                return;
+                throw new ArgumentException("Cannot find second slide");
             }
 
             SlidePart secondSlidePart = presentationPart.GetPartById(secondSlideId.RelationshipId) as SlidePart;
             if (secondSlidePart == null)
             {
-                Log(() => "Cannot get second slide part");
-                return;
+                throw new ArgumentException("Cannot get second slide part");
             }
 
             // 查找所有包含 {part_title_x} 占位符的形状

@@ -1,1 +1,1 @@
-dotnet run --no-restore  --framework net8.0 -- /mnt/d/work/aippt/1149795_8.pptx  /mnt/d/work/palmmob3_server/cron/output/full_ai_ppt.json /home/palmmob3/www/ai_ppt_generator/test100.pptx
+dotnet run --no-restore  --framework net8.0 -- '/mnt/d/work/palmmob3_office_server/palmmob3_web/aippt_tpl/ca015d085cb668a6495556722728216f.pptx' '/mnt/d/work/palmmob3_office_server/palmmob3_web/appdata/ai_ppt_generator/121212-1762863917.json' '/mnt/d/work/palmmob3_office_server/palmmob3_web/appdata/ai_ppt_generator/121212_1762863917.pptx'

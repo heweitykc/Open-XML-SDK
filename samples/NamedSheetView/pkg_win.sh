@@ -13,9 +13,10 @@ if [ -d "publish" ]; then
     rm -rf publish
 fi
 
+发布为 Windows x64 自包含可执行文件
 echo ""
-echo "Publishing for Linux x64 (net8.0)..."
-DOTNET_DISABLE_VULNERABILITY_CHECKS=1 dotnet publish -c Release -r linux-x64 \
+echo "Publishing for Windows x64 (net8.0)..."
+DOTNET_DISABLE_VULNERABILITY_CHECKS=1 dotnet publish -c Release -r win-x64 \
     --framework net8.0 \
     --self-contained true \
     -p:PublishSingleFile=true \
@@ -24,32 +25,11 @@ DOTNET_DISABLE_VULNERABILITY_CHECKS=1 dotnet publish -c Release -r linux-x64 \
     -p:PublishReadyToRun=true \
     -p:EnablePackageVulnerabilityAudit=false \
     -p:NuGetAudit=false \
-    -o publish/linux-x64
-
+    -o publish/win-x64
 
 if [ $? -ne 0 ]; then
     echo ""
-    echo "Linux build failed!"
+    echo "Windows build failed!"
     exit 1
 fi
-
-# 发布为 Windows x64 自包含可执行文件
-# echo ""
-# echo "Publishing for Windows x64 (net8.0)..."
-# DOTNET_DISABLE_VULNERABILITY_CHECKS=1 dotnet publish -c Release -r win-x64 \
-#     --framework net8.0 \
-#     --self-contained true \
-#     -p:PublishSingleFile=true \
-#     -p:IncludeNativeLibrariesForSelfExtract=true \
-#     -p:EnableCompressionInSingleFile=false \
-#     -p:PublishReadyToRun=true \
-#     -p:EnablePackageVulnerabilityAudit=false \
-#     -p:NuGetAudit=false \
-#     -o publish/win-x64
-
-# if [ $? -ne 0 ]; then
-#     echo ""
-#     echo "Windows build failed!"
-#     exit 1
-# fi
 
