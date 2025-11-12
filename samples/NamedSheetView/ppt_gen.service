@@ -1,0 +1,17 @@
+   [Unit]
+   Description=ppt_gen HTTP Server
+   After=network.target
+
+   [Service]
+   Type=simple
+   WorkingDirectory=/officedocker/officep1-1/palmmob3_web/ppt_gen
+   ExecStart=/officedocker/officep1-1/palmmob3_web/ppt_gen/AddNamedSheetView --server
+   Restart=always
+   RestartSec=5
+   Environment=ASPNETCORE_ENVIRONMENT=Production
+   Environment=DOTNET_ENVIRONMENT=Production
+   StandardOutput=append:/officedocker/officep1-1/palmmob3_web/ppt_gen/appdata/stdout.log
+   StandardError=append:/officedocker/officep1-1/palmmob3_web/ppt_gen/appdata/stderr.log
+
+   [Install]
+   WantedBy=multi-user.target

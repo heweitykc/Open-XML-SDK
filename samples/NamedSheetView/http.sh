@@ -1,0 +1,1 @@
+dotnet run --project AddNamedSheetView.csproj --framework net8.0 -- --server

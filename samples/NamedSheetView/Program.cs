@@ -7,12 +7,19 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using DocumentFormat.OpenXml.Presentation;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
 using System.Text.Json;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
 
 using A = DocumentFormat.OpenXml.Drawing;
 using P = DocumentFormat.OpenXml.Presentation;
@@ -27,8 +34,24 @@ namespace AddNamedSheetView
 {
     public class Program
     {
-        public static void Main(string[] args)
+        private static readonly HttpClient HttpClient = new HttpClient();
+        private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        private static readonly string CacheDirectory = Path.Combine(AppContext.BaseDirectory, "aippt_tpl");
+        private static readonly string AppDataDirectory = Path.Combine(AppContext.BaseDirectory, "appdata");
+        private const string OutputDirectoryName = "ai_ppt_generator";
+        private const string DefaultPrefix = "http://+:8050/";
+        private static readonly HashSet<char> InvalidFileNameChars = new HashSet<char>(Path.GetInvalidFileNameChars());
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> TemplateLocks = new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
+
+        public static async Task Main(string[] args)
         {
+            if (args.Length > 0 && string.Equals(args[0], "--server", StringComparison.OrdinalIgnoreCase))
+            {
+                string? prefix = args.Length > 1 ? args[1] : null;
+                await RunServerAsync(prefix).ConfigureAwait(false);
+                return;
+            }
+
             if (args.Length < 2)
             {
                 Common.ExampleUtilities.ShowHelp(new string[]
@@ -43,20 +66,20 @@ namespace AddNamedSheetView
                 return;
             }
 
-                try
-                {
-                    string? outputPathArgument = args.Length > 2 ? args[2] : null;
-                    string outputPath = GeneratePresentation(args[0], args[1], outputPathArgument);
-                    Console.WriteLine(outputPath);
-                }
-                catch (Exception ex)
-                {
-                    Log(() => $"Processing failed: {ex.Message}");
+            try
+            {
+                string? outputPathArgument = args.Length > 2 ? args[2] : null;
+                string outputPath = GeneratePresentation(args[0], args[1], outputPathArgument);
+                Console.WriteLine(outputPath);
+            }
+            catch (Exception ex)
+            {
+                Log(() => $"Processing failed: {ex.Message}");
 #if DEBUG
-                    Log(() => ex.ToString());
+                Log(() => ex.ToString());
 #endif
-                    Console.Error.WriteLine($"Error: {ex.Message}");
-                }
+                Console.Error.WriteLine($"Error: {ex.Message}");
+            }
         }
 
             public static string GeneratePresentation(string sourceFilePath, string jsonFilePath, string? outputFilePath = null)
@@ -1325,18 +1348,57 @@ namespace AddNamedSheetView
         private static string GetImageHashKey(ImagePart imagePart)
         {
             try
+                {
+                    // 1. 获取文件流并读取前 N 个字节
+                    const int HeaderLength = 4096; // 选取 4KB 头部作为特征
+                    
+                    using var stream = imagePart.GetStream();
+                    
+                    if (stream.Length == 0)
+                    {
+                        return $"{imagePart.ContentType}:Empty";
+                    }
+                    
+                    // 2. 构造一个包含 Size + Header 的字节数组
+                    // Header bytes + 8 bytes (for Length)
+                    byte[] buffer = new byte[Math.Min(HeaderLength, (int)stream.Length) + 8]; 
+                    
+                    // 存储文件长度（作为重要的区分特征）
+                    byte[] lengthBytes = BitConverter.GetBytes(stream.Length);
+                    Array.Copy(lengthBytes, 0, buffer, 0, 8);
+                    
+                    // 读取头部数据
+                    stream.Read(buffer, 8, buffer.Length - 8);
+
+                    // 3. 使用快速非加密哈希算法 (FNV-1a 或 MurmurHash)
+                    // C# 内建库没有这些，这里使用简单的非加密哈希（快速但不安全）
+                    
+                    int hash = Fnv1aHash(buffer);
+                    
+                    // 4. 返回 Key
+                    return $"{imagePart.ContentType}:{hash.ToString("X8")}";
+                }
+                catch (Exception ex)
+                {
+                    Log(() => $"    Failed to hash image {imagePart.Uri}: {ex.Message}");
+                    return null;
+                }
+        }
+
+        // FNV-1a Hash 辅助函数（用于快速非加密哈希）
+        private static int Fnv1aHash(byte[] data)
+        {
+            const uint FnvPrime = 16777619;
+            const uint FnvOffsetBasis = 2166136261;
+
+            uint hash = FnvOffsetBasis;
+            for (int i = 0; i < data.Length; i++)
             {
-                using var sha256 = SHA256.Create();
-                using var stream = imagePart.GetStream();
-                var hashBytes = sha256.ComputeHash(stream);
-                var hash = Convert.ToHexString(hashBytes);
-                return $"{imagePart.ContentType}:{hash}";
+                hash ^= data[i];
+                hash *= FnvPrime;
             }
-            catch (Exception ex)
-            {
-                Log(() => $"    Failed to hash image {imagePart.Uri}: {ex.Message}");
-                return null;
-            }
+
+            return (int)hash;
         }
 
         private static void CleanupUnusedMediaResources(PresentationPart presentationPart)
@@ -1531,6 +1593,555 @@ namespace AddNamedSheetView
             }
 
             return result.ToString().TrimEnd();
+        }
+
+        private static async Task RunServerAsync(string? prefix)
+        {
+            string listeningPrefix = string.IsNullOrWhiteSpace(prefix) ? DefaultPrefix : prefix;
+            if (!listeningPrefix.EndsWith("/", StringComparison.Ordinal))
+            {
+                listeningPrefix += "/";
+            }
+
+            Directory.CreateDirectory(CacheDirectory);
+            Directory.CreateDirectory(GetOutputDirectory());
+
+            var listener = new HttpListener();
+            listener.Prefixes.Add(listeningPrefix);
+
+            try
+            {
+                listener.Start();
+            }
+            catch (HttpListenerException ex)
+            {
+                Console.Error.WriteLine($"Failed to start server on {listeningPrefix}: {ex.Message}");
+                return;
+            }
+
+            Console.WriteLine($"AddNamedSheetView server listening on {listeningPrefix}");
+
+            while (listener.IsListening)
+            {
+                HttpListenerContext context;
+                try
+                {
+                    context = await listener.GetContextAsync().ConfigureAwait(false);
+                }
+                catch (HttpListenerException)
+                {
+                    break;
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
+
+                _ = Task.Run(() => HandleRequestAsync(context));
+            }
+
+            listener.Close();
+        }
+
+        private static async Task HandleRequestAsync(HttpListenerContext context)
+        {
+            try
+            {
+                string path = context.Request.Url?.AbsolutePath ?? "/";
+
+                if (string.Equals(path, "/", StringComparison.Ordinal))
+                {
+                    await WriteJsonAsync(context.Response, new
+                    {
+                        code = 0,
+                        data = new
+                        {
+                            message = "AddNamedSheetView server is running.",
+                            endpoints = new[] { "/gen?tpl=...&uid=...&data=...", "/files/{path}" }
+                        }
+                    }).ConfigureAwait(false);
+                    return;
+                }
+
+                if (path.StartsWith("/files/", StringComparison.OrdinalIgnoreCase))
+                {
+                    await ServeFileAsync(context).ConfigureAwait(false);
+                    return;
+                }
+
+                if (path.StartsWith("/gen", StringComparison.OrdinalIgnoreCase))
+                {
+                    await HandleGenerateAsync(context).ConfigureAwait(false);
+                    return;
+                }
+
+                await WriteJsonAsync(context.Response, new
+                {
+                    code = 404,
+                    data = new { msg = "Not Found" }
+                }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                PrintServerError("HandleRequestAsync", ex);
+                await WriteJsonAsync(context.Response, new
+                {
+                    code = 500,
+                    data = new { msg = ex.Message }
+                }).ConfigureAwait(false);
+            }
+            finally
+            {
+                context.Response.Close();
+            }
+        }
+
+        private static async Task HandleGenerateAsync(HttpListenerContext context)
+        {
+            var request = context.Request;
+
+            if (!string.Equals(request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
+            {
+                await WriteJsonAsync(context.Response, new
+                {
+                    code = 405,
+                    data = new { msg = "Only GET or POST supported" }
+                }).ConfigureAwait(false);
+                return;
+            }
+
+            string? tplUrl = request.QueryString["tpl"] ?? request.QueryString["tpl_url"];
+            if (string.IsNullOrWhiteSpace(tplUrl))
+            {
+                await WriteJsonAsync(context.Response, new
+                {
+                    code = 400,
+                    data = new { msg = "tpl query parameter is required" }
+                }).ConfigureAwait(false);
+                return;
+            }
+
+            string outlineRaw = await ResolveOutlineAsync(request).ConfigureAwait(false);
+            string outlineJson = NormalizeOutlinePayload(outlineRaw);
+            Console.WriteLine($"[Server] Received outline (raw length={outlineRaw?.Length ?? 0}): {TruncateForLog(outlineRaw, 512)}");
+            Console.WriteLine($"[Server] Outline decoded (length={outlineJson?.Length ?? 0}): {TruncateForLog(outlineJson, 512)}");
+
+            if (string.IsNullOrWhiteSpace(outlineJson))
+            {
+                await WriteJsonAsync(context.Response, new
+                {
+                    code = 400,
+                    data = new { msg = "outline data is required" }
+                }).ConfigureAwait(false);
+                return;
+            }
+
+            string uid = request.QueryString["uid"];
+            if (string.IsNullOrWhiteSpace(uid))
+            {
+                uid = Guid.NewGuid().ToString("N");
+            }
+
+            var stopwatch = Stopwatch.StartNew();
+
+            try
+            {
+                string templatePath = await GetCachedTemplateAsync(tplUrl).ConfigureAwait(false);
+                string outlinePath = await PersistOutlineAsync(uid, outlineJson).ConfigureAwait(false);
+                (string outputPath, string downloadUrl) = await GeneratePresentationAsync(uid, templatePath, outlinePath, context.Request.Url).ConfigureAwait(false);
+
+                stopwatch.Stop();
+
+                await WriteJsonAsync(context.Response, new
+                {
+                    code = 0,
+                    data = new
+                    {
+                        ppt_path = outputPath,
+                        ppt_url = downloadUrl,
+                        elap = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 2)
+                    }
+                }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                PrintServerError("HandleGenerateAsync", ex);
+                stopwatch.Stop();
+                await WriteJsonAsync(context.Response, new
+                {
+                    code = 500,
+                    data = new { msg = ex.Message }
+                }).ConfigureAwait(false);
+            }
+        }
+
+        private static async Task ServeFileAsync(HttpListenerContext context)
+        {
+            string path = context.Request.Url?.AbsolutePath ?? string.Empty;
+            string relativePath = path["/files/".Length..];
+
+            if (string.IsNullOrWhiteSpace(relativePath))
+            {
+                await WriteJsonAsync(context.Response, new
+                {
+                    code = 400,
+                    data = new { msg = "file path is required" }
+                }).ConfigureAwait(false);
+                return;
+            }
+
+            string safePath = relativePath.Replace('/', Path.DirectorySeparatorChar);
+            string targetPath = Path.Combine(AppDataDirectory, safePath);
+            string fullPath = Path.GetFullPath(targetPath);
+            string appDataRoot = Path.GetFullPath(AppDataDirectory);
+
+            if (!fullPath.StartsWith(appDataRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                await WriteJsonAsync(context.Response, new
+                {
+                    code = 403,
+                    data = new { msg = "access denied" }
+                }).ConfigureAwait(false);
+                return;
+            }
+
+            if (!File.Exists(fullPath))
+            {
+                await WriteJsonAsync(context.Response, new
+                {
+                    code = 404,
+                    data = new { msg = "file not found" }
+                }).ConfigureAwait(false);
+                return;
+            }
+
+            context.Response.ContentType = GetContentType(fullPath);
+            context.Response.StatusCode = 200;
+
+            await using var fs = File.OpenRead(fullPath);
+            await fs.CopyToAsync(context.Response.OutputStream).ConfigureAwait(false);
+        }
+
+        private static async Task<string> ResolveOutlineAsync(HttpListenerRequest request)
+        {
+            string? outline = request.QueryString["data"] ?? request.QueryString["outline"];
+            if (!string.IsNullOrEmpty(outline))
+            {
+                return outline;
+            }
+
+            if (request.HasEntityBody)
+            {
+                using var reader = new StreamReader(request.InputStream, request.ContentEncoding ?? Encoding.UTF8);
+                string body = await reader.ReadToEndAsync().ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(body))
+                {
+                    return string.Empty;
+                }
+
+                if (IsJson(request.ContentType))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(body);
+                        if (doc.RootElement.TryGetProperty("outline", out JsonElement outlineElement))
+                        {
+                            return outlineElement.GetString() ?? outlineElement.ToString();
+                        }
+
+                        if (doc.RootElement.TryGetProperty("data", out JsonElement dataElement))
+                        {
+                            return dataElement.GetString() ?? dataElement.ToString();
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        return body;
+                    }
+                }
+
+                return body;
+            }
+
+            return string.Empty;
+        }
+
+        private static async Task<string> GetCachedTemplateAsync(string tplUrl)
+        {
+            if (string.IsNullOrWhiteSpace(tplUrl))
+            {
+                throw new ArgumentException("Template URL is required", nameof(tplUrl));
+            }
+
+            if (File.Exists(tplUrl))
+            {
+                return Path.GetFullPath(tplUrl);
+            }
+
+            if (!Uri.TryCreate(tplUrl, UriKind.RelativeOrAbsolute, out Uri? uri))
+            {
+                throw new InvalidOperationException($"Invalid template URL: {tplUrl}");
+            }
+
+            if (!uri.IsAbsoluteUri)
+            {
+                string localPath = Path.GetFullPath(tplUrl);
+                if (!File.Exists(localPath))
+                {
+                    throw new FileNotFoundException($"Template file not found: {tplUrl}", localPath);
+                }
+
+                return localPath;
+            }
+
+            if (uri.IsFile)
+            {
+                string localFile = uri.LocalPath;
+                if (!File.Exists(localFile))
+                {
+                    throw new FileNotFoundException($"Template file not found: {tplUrl}", localFile);
+                }
+
+                return localFile;
+            }
+
+            string tplHash = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(tplUrl)));
+            string tplPath = Path.Combine(CacheDirectory, $"{tplHash}.pptx");
+
+            if (File.Exists(tplPath))
+            {
+                return tplPath;
+            }
+
+            var semaphore = TemplateLocks.GetOrAdd(tplPath, _ => new SemaphoreSlim(1, 1));
+            await semaphore.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (File.Exists(tplPath))
+                {
+                    return tplPath;
+                }
+
+                using HttpResponseMessage response = await HttpClient.GetAsync(uri).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new InvalidOperationException($"Failed to download template: {(int)response.StatusCode} {response.ReasonPhrase}");
+                }
+
+                Directory.CreateDirectory(Path.GetDirectoryName(tplPath)!);
+                string tempPath = tplPath + ".tmp_" + Guid.NewGuid().ToString("N");
+
+                try
+                {
+                    await using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+                    {
+                        await response.Content.CopyToAsync(fs).ConfigureAwait(false);
+                    }
+
+                    File.Move(tempPath, tplPath, overwrite: true);
+                }
+                catch
+                {
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
+                    throw;
+                }
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+
+            return tplPath;
+        }
+
+        private static async Task<string> PersistOutlineAsync(string uid, string outlineJson)
+        {
+            string directory = GetOutputDirectory();
+            string outlineFileName = CreateUniqueFileName(uid, "json");
+            string outlinePath = Path.Combine(directory, outlineFileName);
+            await File.WriteAllTextAsync(outlinePath, outlineJson).ConfigureAwait(false);
+            return outlinePath;
+        }
+
+        private static Task<(string outputPath, string downloadUrl)> GeneratePresentationAsync(string uid, string templatePath, string outlinePath, Uri? requestUri)
+        {
+            string directory = GetOutputDirectory();
+            string pptFileName = CreateUniqueFileName(uid, "pptx");
+            string destination = Path.Combine(directory, pptFileName);
+
+            GeneratePresentation(templatePath, outlinePath, destination);
+
+            string downloadUrl = BuildDownloadUrl(requestUri, pptFileName);
+            return Task.FromResult((destination, downloadUrl));
+        }
+
+        private static string GetOutputDirectory()
+        {
+            string output = Path.Combine(AppDataDirectory, OutputDirectoryName);
+            Directory.CreateDirectory(output);
+            return output;
+        }
+
+        private static string BuildDownloadUrl(Uri? requestUri, string fileName)
+        {
+            if (requestUri == null)
+            {
+                return Path.Combine(AppDataDirectory, OutputDirectoryName, fileName);
+            }
+
+            string baseUri = $"{requestUri.Scheme}://{requestUri.Authority}";
+            return $"{baseUri}/files/{OutputDirectoryName}/{Uri.EscapeDataString(fileName)}";
+        }
+
+        private static async Task WriteJsonAsync(HttpListenerResponse response, object payload)
+        {
+            response.ContentType = "application/json";
+            response.StatusCode = 200;
+            byte[] buffer = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
+            await response.OutputStream.WriteAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+        }
+
+        private static bool IsJson(string? contentType)
+        {
+            if (string.IsNullOrWhiteSpace(contentType))
+            {
+                return false;
+            }
+
+            return contentType.Contains("application/json", StringComparison.OrdinalIgnoreCase)
+                || contentType.Contains("text/json", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetContentType(string fullPath)
+        {
+            string extension = Path.GetExtension(fullPath).ToLowerInvariant();
+
+            return extension switch
+            {
+                ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                ".json" => "application/json",
+                _ => "application/octet-stream",
+            };
+        }
+
+        private static string TruncateForLog(string? value, int maxLength)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return string.Empty;
+            }
+
+            if (value.Length <= maxLength)
+            {
+                return value;
+            }
+
+            return value.Substring(0, maxLength) + "...";
+        }
+
+        private static string CreateUniqueFileName(string? prefix, string extension)
+        {
+            string safePrefix = SanitizeFileNameComponent(prefix);
+            string timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture);
+            string random = Guid.NewGuid().ToString("N")[..8];
+            string sanitizedExtension = string.IsNullOrWhiteSpace(extension) ? "dat" : extension.TrimStart('.');
+            return $"{safePrefix}_{timestamp}_{random}.{sanitizedExtension}";
+        }
+
+        private static string SanitizeFileNameComponent(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return "item";
+            }
+
+            var sb = new StringBuilder(value.Length);
+            foreach (char c in value)
+            {
+                sb.Append(InvalidFileNameChars.Contains(c) ? '_' : c);
+            }
+
+            string result = sb.ToString().Trim('_');
+            return string.IsNullOrWhiteSpace(result) ? "item" : result;
+        }
+
+        private static string NormalizeOutlinePayload(string? payload)
+        {
+            if (string.IsNullOrWhiteSpace(payload))
+            {
+                return string.Empty;
+            }
+
+            string trimmed = payload.Trim();
+            if (IsLikelyJson(trimmed))
+            {
+                return trimmed;
+            }
+
+            if (trimmed.Contains('&') || trimmed.Contains('='))
+            {
+                string[] pairs = trimmed.Split('&', StringSplitOptions.RemoveEmptyEntries);
+                foreach (string pair in pairs)
+                {
+                    string[] kv = pair.Split('=', 2);
+                    if (kv.Length != 2)
+                    {
+                        continue;
+                    }
+
+                    if (kv[0].Equals("outline", StringComparison.OrdinalIgnoreCase) ||
+                        kv[0].Equals("data", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string decodedValue = WebUtility.UrlDecode(kv[1]);
+                        if (!string.IsNullOrWhiteSpace(decodedValue))
+                        {
+                            decodedValue = decodedValue.Trim();
+                            if (IsLikelyJson(decodedValue))
+                            {
+                                return decodedValue;
+                            }
+
+                            trimmed = decodedValue;
+                        }
+                    }
+                }
+            }
+
+            if (trimmed.Contains('%') || trimmed.Contains('+'))
+            {
+                string decoded = WebUtility.UrlDecode(trimmed).Trim();
+                if (!string.IsNullOrWhiteSpace(decoded))
+                {
+                    if (IsLikelyJson(decoded))
+                    {
+                        return decoded;
+                    }
+
+                    trimmed = decoded;
+                }
+            }
+
+            return trimmed;
+        }
+
+        private static bool IsLikelyJson(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            char first = value.TrimStart()[0];
+            return first == '{' || first == '[';
+        }
+
+        private static void PrintServerError(string context, Exception ex)
+        {
+            Console.Error.WriteLine($"[Server][Error][{context}] {ex}");
         }
     }
 }
