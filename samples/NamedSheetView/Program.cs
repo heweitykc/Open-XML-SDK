@@ -1724,8 +1724,7 @@ namespace AddNamedSheetView
 
             string outlineRaw = await ResolveOutlineAsync(request).ConfigureAwait(false);
             string outlineJson = NormalizeOutlinePayload(outlineRaw);
-            Console.WriteLine($"[Server] Received outline (raw length={outlineRaw?.Length ?? 0}): {TruncateForLog(outlineRaw, 512)}");
-            Console.WriteLine($"[Server] Outline decoded (length={outlineJson?.Length ?? 0}): {TruncateForLog(outlineJson, 512)}");
+            Log(() => ($"Received outline (raw length={outlineRaw?.Length ?? 0}): {outlineRaw}"));
 
             if (string.IsNullOrWhiteSpace(outlineJson))
             {
